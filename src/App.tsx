@@ -5,15 +5,17 @@ import LearningPath from './components/LearningPath';
 import Modules from './components/Modules';
 import CareerHub from './components/CareerHub';
 import Glossary from './components/Glossary';
+import Labs from './components/Labs';
 
-type Tab = 'home' | 'path' | 'modules' | 'career' | 'glossary';
+type Tab = 'home' | 'path' | 'modules' | 'labs' | 'career' | 'glossary';
 const STORAGE_KEY = 'genai_portal_v2_progress';
 
 const NAV = [
   { id: 'home' as Tab, label: 'Home', icon: '⌂' },
   { id: 'path' as Tab, label: 'Path', icon: '◎' },
   { id: 'modules' as Tab, label: 'Modules', icon: '◈' },
-  { id: 'career' as Tab, label: 'Career', icon: '⬡' },
+  { id: 'labs' as Tab, label: 'Labs', icon: '⬡' },
+  { id: 'career' as Tab, label: 'Career', icon: '◉' },
   { id: 'glossary' as Tab, label: 'Glossary', icon: '▤' },
 ];
 
@@ -119,6 +121,7 @@ export default function App() {
         {tab === 'home' && <Hero onNavigate={navigate} />}
         {tab === 'path' && <LearningPath completedLessons={completedLessons} onNavigate={navigate} />}
         {tab === 'modules' && <Modules completedLessons={completedLessons} onComplete={(id) => setCompletedLessons(p => new Set([...p, id]))} />}
+        {tab === 'labs' && <Labs />}
         {tab === 'career' && <CareerHub />}
         {tab === 'glossary' && <Glossary />}
       </main>

@@ -187,58 +187,76 @@ export default function CareerHub() {
             ))}
           </div>
 
-          {/* Salary chart with company examples */}
+          {/* Salary chart — per-company breakdown */}
           <div className="p-6 rounded-2xl" style={{ background: '#0D1F38', border: '1px solid rgba(255,255,255,0.07)' }}>
-            <h3 className="font-display text-2xl font-semibold mb-2" style={{ color: '#F0EBE0' }}>💶 Salary Benchmarks (Netherlands 2026)</h3>
-            <p className="text-xs mb-6" style={{ color: 'rgba(232,228,220,0.3)' }}>Total cash compensation. Source: Glassdoor NL, LinkedIn Salary Insights, direct recruiter data.</p>
-            <div className="space-y-6">
+            <h3 className="font-display text-2xl font-semibold mb-1" style={{ color: '#F0EBE0' }}>💶 Salary by Company (Netherlands 2026)</h3>
+            <p className="text-xs mb-6" style={{ color: 'rgba(232,228,220,0.3)' }}>Total cash compensation per company based on Glassdoor NL, LinkedIn Salary Insights, and recruiter data. Numbers reflect base salary at mid-to-senior level.</p>
+            <div className="space-y-8">
               {[
                 {
-                  role: 'Data Engineer',
-                  range: '€55K – €80K',
-                  bar: 38,
-                  color: '#00B4D8',
-                  companies: ['ING', 'bol.com', 'Coolblue', 'NXP'],
+                  role: 'Data Engineer', color: '#00B4D8',
+                  note: 'Entry to mid-level. Focus on pipelines, dbt, Spark.',
+                  companies: [
+                    { name: 'bol.com',   range: '€58K – €78K', bar: 44 },
+                    { name: 'ING',       range: '€60K – €75K', bar: 42 },
+                    { name: 'Coolblue',  range: '€55K – €70K', bar: 38 },
+                    { name: 'NXP',       range: '€62K – €80K', bar: 46 },
+                    { name: 'TomTom',    range: '€60K – €76K', bar: 44 },
+                  ],
                 },
                 {
-                  role: 'ML / AI Engineer',
-                  range: '€70K – €100K',
-                  bar: 56,
-                  color: '#9B5DE5',
-                  companies: ['TomTom', 'Philips', 'Booking.com', 'ASML'],
+                  role: 'ML / AI Engineer', color: '#9B5DE5',
+                  note: 'Mid-level. Requires RAG, LLM integration, model deployment.',
+                  companies: [
+                    { name: 'Booking.com', range: '€80K – €105K', bar: 58 },
+                    { name: 'ASML',        range: '€78K – €102K', bar: 56 },
+                    { name: 'Philips',     range: '€75K – €95K',  bar: 52 },
+                    { name: 'ING',         range: '€75K – €100K', bar: 54 },
+                    { name: 'TomTom',      range: '€72K – €92K',  bar: 50 },
+                  ],
                 },
                 {
-                  role: 'Senior AI Engineer',
-                  range: '€90K – €130K',
-                  bar: 76,
-                  color: '#E8A020',
-                  companies: ['Adyen', 'Weaviate', 'Uber NL', 'Shell'],
+                  role: 'Senior AI Engineer', color: '#E8A020',
+                  note: '5+ yrs. System design, multi-model orchestration, team lead.',
+                  companies: [
+                    { name: 'Adyen',     range: '€95K – €125K', bar: 72 },
+                    { name: 'Weaviate',  range: '€90K – €122K', bar: 70 },
+                    { name: 'Uber NL',   range: '€98K – €130K', bar: 76 },
+                    { name: 'Shell',     range: '€90K – €118K', bar: 68 },
+                    { name: 'ASML',      range: '€95K – €125K', bar: 72 },
+                  ],
                 },
                 {
-                  role: 'Staff / Principal / Lead AI',
-                  range: '€120K – €160K+',
-                  bar: 96,
-                  color: '#E05A4E',
-                  companies: ['Booking.com', 'Netflix NL', 'ASML', 'Adyen'],
+                  role: 'Staff / Principal / Lead AI', color: '#E05A4E',
+                  note: 'Org-wide impact. Sets technical direction. Often includes equity.',
+                  companies: [
+                    { name: 'Booking.com', range: '€125K – €165K+', bar: 94 },
+                    { name: 'Netflix NL',  range: '€140K – €185K+', bar: 100 },
+                    { name: 'Adyen',       range: '€120K – €150K',  bar: 86 },
+                    { name: 'ASML',        range: '€118K – €155K',  bar: 88 },
+                    { name: 'Weaviate',    range: '€115K – €145K',  bar: 82 },
+                  ],
                 },
-              ].map(item => (
-                <div key={item.role}>
-                  <div className="flex justify-between mb-2">
-                    <span className="text-sm font-medium" style={{ color: '#E8E4DC' }}>{item.role}</span>
-                    <span className="text-sm font-mono font-semibold" style={{ color: item.color }}>{item.range}</span>
+              ].map(tier => (
+                <div key={tier.role}>
+                  <div className="flex items-baseline gap-3 mb-1">
+                    <span className="font-semibold text-base" style={{ color: tier.color }}>{tier.role}</span>
+                    <span className="text-xs" style={{ color: 'rgba(232,228,220,0.3)' }}>{tier.note}</span>
                   </div>
-                  <div className="h-2 rounded-full overflow-hidden mb-2" style={{ background: 'rgba(255,255,255,0.05)' }}>
-                    <div className="h-full rounded-full progress-fill"
-                      style={{ width: `${item.bar}%`, background: `linear-gradient(90deg, ${item.color}80, ${item.color})` }} />
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {item.companies.map(c => (
-                      <span key={c} className="text-xs px-2 py-0.5 rounded-full font-mono"
-                        style={{ background: `${item.color}10`, color: `${item.color}BB`, border: `1px solid ${item.color}20` }}>
-                        {c}
-                      </span>
+                  <div className="mt-3 space-y-2">
+                    {tier.companies.map(co => (
+                      <div key={co.name} className="flex items-center gap-3">
+                        <span className="text-xs font-mono w-24 flex-shrink-0 text-right" style={{ color: 'rgba(232,228,220,0.45)' }}>{co.name}</span>
+                        <div className="flex-1 h-5 rounded-lg overflow-hidden relative" style={{ background: 'rgba(255,255,255,0.04)' }}>
+                          <div className="h-full rounded-lg transition-all" style={{ width: `${co.bar}%`, background: `linear-gradient(90deg, ${tier.color}50, ${tier.color}90)` }} />
+                          <span className="absolute inset-0 flex items-center pl-3 text-xs font-mono font-semibold" style={{ color: tier.color }}>
+                            {co.range}
+                          </span>
+                        </div>
+                      </div>
                     ))}
                   </div>
+                  <div className="mt-3 h-px" style={{ background: 'rgba(255,255,255,0.05)' }} />
                 </div>
               ))}
             </div>
@@ -294,6 +312,93 @@ export default function CareerHub() {
                       <span className="text-xs font-mono w-7 text-right" style={{ color: 'rgba(232,228,220,0.25)' }}>{s.pct}%</span>
                     </div>
                   ))}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Live job openings */}
+          <div className="p-6 rounded-2xl" style={{ background: '#0D1F38', border: '1px solid rgba(255,255,255,0.07)' }}>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-display text-2xl font-semibold" style={{ color: '#F0EBE0' }}>📌 Current Openings — Top NL Companies</h3>
+              <span className="text-xs font-mono px-2 py-1 rounded-full" style={{ background: 'rgba(46,196,182,0.1)', color: '#2EC4B6', border: '1px solid rgba(46,196,182,0.2)' }}>
+                Updated Q2 2026
+              </span>
+            </div>
+            <p className="text-xs mb-6" style={{ color: 'rgba(232,228,220,0.3)' }}>Data + AI Engineer roles actively listed. Click a role to go directly to the job posting.</p>
+            <div className="space-y-3">
+              {[
+                {
+                  company: 'Booking.com', city: 'Amsterdam', color: '#00B4D8',
+                  jobs: [
+                    { title: 'Senior ML Engineer — Ranking & Personalisation', type: 'Full-time', url: 'https://jobs.booking.com/careers?query=machine+learning' },
+                    { title: 'Data Engineer L4 — Supply Platform', type: 'Full-time', url: 'https://jobs.booking.com/careers?query=data+engineer' },
+                    { title: 'AI Research Scientist — NLP', type: 'Full-time', url: 'https://jobs.booking.com/careers?query=AI+scientist' },
+                  ],
+                },
+                {
+                  company: 'ASML', city: 'Eindhoven', color: '#9B5DE5',
+                  jobs: [
+                    { title: 'ML Engineer — Computational Lithography', type: 'Full-time', url: 'https://www.asml.com/en/careers/find-your-job?q=machine+learning' },
+                    { title: 'Senior Data Scientist — Yield Intelligence', type: 'Full-time', url: 'https://www.asml.com/en/careers/find-your-job?q=data+scientist' },
+                    { title: 'AI Software Engineer — Computer Vision', type: 'Full-time', url: 'https://www.asml.com/en/careers/find-your-job?q=computer+vision' },
+                  ],
+                },
+                {
+                  company: 'Adyen', city: 'Amsterdam', color: '#E8A020',
+                  jobs: [
+                    { title: 'ML Engineer — Fraud & Risk', type: 'Full-time', url: 'https://www.adyen.com/careers/vacancies?search=machine+learning' },
+                    { title: 'Senior Data Engineer — Merchant Analytics', type: 'Full-time', url: 'https://www.adyen.com/careers/vacancies?search=data+engineer' },
+                  ],
+                },
+                {
+                  company: 'ING', city: 'Amsterdam', color: '#F77F00',
+                  jobs: [
+                    { title: 'Data Engineer — Financial Crime Prevention', type: 'Full-time', url: 'https://www.ing.jobs/netherlands/vacancies.htm?q=data+engineer' },
+                    { title: 'AI Engineer — Generative AI Platform', type: 'Full-time', url: 'https://www.ing.jobs/netherlands/vacancies.htm?q=AI+engineer' },
+                    { title: 'ML Engineer — Credit Decisioning', type: 'Full-time', url: 'https://www.ing.jobs/netherlands/vacancies.htm?q=machine+learning' },
+                  ],
+                },
+                {
+                  company: 'Weaviate', city: 'Amsterdam (hybrid/remote)', color: '#2EC4B6',
+                  jobs: [
+                    { title: 'AI / ML Engineer — Core Platform', type: 'Full-time', url: 'https://weaviate.io/company/careers' },
+                    { title: 'Solutions Engineer — Enterprise AI', type: 'Full-time', url: 'https://weaviate.io/company/careers' },
+                  ],
+                },
+                {
+                  company: 'Philips', city: 'Eindhoven', color: '#00B4D8',
+                  jobs: [
+                    { title: 'ML Engineer — Medical Imaging AI', type: 'Full-time', url: 'https://www.philips.com/a-w/careers/job-search.html#q=machine+learning' },
+                    { title: 'AI Research Scientist — Clinical Decision Support', type: 'Full-time', url: 'https://www.philips.com/a-w/careers/job-search.html#q=AI+scientist' },
+                  ],
+                },
+              ].map(co => (
+                <div key={co.company} className="rounded-xl overflow-hidden"
+                  style={{ background: 'rgba(255,255,255,0.02)', border: `1px solid ${co.color}18` }}>
+                  <div className="flex items-center gap-3 px-4 py-3" style={{ borderBottom: `1px solid ${co.color}15` }}>
+                    <span className="font-semibold text-sm" style={{ color: co.color }}>{co.company}</span>
+                    <span className="text-xs" style={{ color: 'rgba(232,228,220,0.3)' }}>📍 {co.city}</span>
+                    <span className="ml-auto text-xs font-mono px-1.5 py-0.5 rounded"
+                      style={{ background: `${co.color}12`, color: co.color }}>
+                      {co.jobs.length} open
+                    </span>
+                  </div>
+                  <div className="divide-y" style={{ borderColor: 'rgba(255,255,255,0.04)' }}>
+                    {co.jobs.map((job, ji) => (
+                      <a key={ji} href={job.url} target="_blank" rel="noopener noreferrer"
+                        className="flex items-center justify-between px-4 py-2.5 group transition-colors hover:bg-white/[0.02]">
+                        <div className="flex items-center gap-2">
+                          <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: co.color + '80' }} />
+                          <span className="text-sm group-hover:underline" style={{ color: 'rgba(232,228,220,0.7)' }}>{job.title}</span>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0 ml-4">
+                          <span className="text-xs font-mono" style={{ color: 'rgba(232,228,220,0.25)' }}>{job.type}</span>
+                          <span className="text-xs" style={{ color: co.color + '80' }}>↗</span>
+                        </div>
+                      </a>
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>
@@ -398,13 +503,15 @@ export default function CareerHub() {
                 <div className="grid md:grid-cols-2 gap-5">
                   {/* Roles + salaries */}
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-[0.12em] mb-3" style={{ color: 'rgba(232,228,220,0.3)' }}>Open Roles</div>
+                    <div className="text-xs font-semibold uppercase tracking-[0.12em] mb-3" style={{ color: 'rgba(232,228,220,0.3)' }}>Roles & Salary at {co.name}</div>
                     <div className="space-y-2">
                       {co.roles.map(r => (
-                        <div key={r.title} className="flex items-center justify-between p-3 rounded-xl"
+                        <div key={r.title} className="p-3 rounded-xl"
                           style={{ background: `${co.color}08`, border: `1px solid ${co.color}15` }}>
-                          <span className="text-sm font-medium" style={{ color: 'rgba(232,228,220,0.8)' }}>{r.title}</span>
-                          <span className="text-sm font-mono font-semibold ml-4 flex-shrink-0" style={{ color: co.color }}>{r.salary}</span>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-sm font-medium" style={{ color: 'rgba(232,228,220,0.8)' }}>{r.title}</span>
+                            <span className="text-sm font-mono font-bold flex-shrink-0" style={{ color: co.color }}>{r.salary}</span>
+                          </div>
                         </div>
                       ))}
                     </div>

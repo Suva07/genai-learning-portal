@@ -11,6 +11,11 @@ const MOD_LEVELS = ['Beginner', 'Beginner', 'Intermediate', 'Intermediate', 'Adv
 
 function renderContent(text: string): string {
   return text
+    // Triple-backtick code blocks — must run before inline code
+    .replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => {
+      const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return `<pre class="code-block" data-lang="${lang || 'python'}"><code>${escaped.trimEnd()}</code></pre>`;
+    })
     .replace(/^---$/gm, '<hr/>')
     .replace(/^### (.+)$/gm, '<h3>$1</h3>')
     .replace(/^## (.+)$/gm, '<h2>$1</h2>')
@@ -228,6 +233,31 @@ export default function Modules({ completedLessons, onComplete }: ModulesProps) 
               Next Lesson →
             </button>
           )}
+        </div>
+
+        {/* Lab notebook link */}
+        <div className="mt-6 p-5 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center gap-4"
+          style={{ background: 'rgba(46,196,182,0.05)', border: '1px solid rgba(46,196,182,0.15)' }}>
+          <div className="flex-1">
+            <div className="text-sm font-semibold mb-0.5" style={{ color: '#2EC4B6' }}>🧪 Hands-on Lab</div>
+            <div className="text-xs" style={{ color: 'rgba(232,228,220,0.45)' }}>
+              Run the companion notebook for this module in Databricks Free Edition or Google Colab.
+            </div>
+          </div>
+          <div className="flex gap-2 flex-shrink-0">
+            <a href={`https://colab.research.google.com/github/Suva07/genai-learning-portal/blob/main/notebooks/0${modIdx + 1}-${mod.id}.ipynb`}
+              target="_blank" rel="noopener noreferrer"
+              className="px-4 py-2 rounded-lg text-xs font-semibold transition-all hover:scale-105 flex items-center gap-1.5"
+              style={{ background: 'rgba(255,160,0,0.12)', color: '#F5A623', border: '1px solid rgba(255,160,0,0.2)' }}>
+              ▶ Open in Colab
+            </a>
+            <a href={`https://raw.githubusercontent.com/Suva07/genai-learning-portal/main/notebooks/0${modIdx + 1}-${mod.id}.ipynb`}
+              download
+              className="px-4 py-2 rounded-lg text-xs font-semibold transition-all hover:scale-105 flex items-center gap-1.5"
+              style={{ background: 'rgba(46,196,182,0.1)', color: '#2EC4B6', border: '1px solid rgba(46,196,182,0.2)' }}>
+              ↓ Download .ipynb
+            </a>
+          </div>
         </div>
       </div>
     );

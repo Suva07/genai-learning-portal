@@ -107,21 +107,62 @@ h1, h2, h3, h4 {
 .progress-fill { transition: width 1s cubic-bezier(0.4,0,0.2,1); }
 
 /* ─── Lesson content typography ─────────────── */
-.lesson-body { color: #C8C0B4; line-height: 1.8; }
-.lesson-body h2 { color: var(--text); font-size: 1.7rem; margin: 2rem 0 0.75rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
-.lesson-body h3 { color: var(--text); font-size: 1.25rem; margin: 1.5rem 0 0.5rem; }
-.lesson-body p { margin-bottom: 0.9rem; }
+.lesson-body { color: #C8C0B4; line-height: 1.9; font-size: 1rem; }
+.lesson-body h2 { color: var(--text); font-size: 2rem; margin: 2.5rem 0 0.85rem; border-bottom: 1px solid var(--border); padding-bottom: 0.6rem; }
+.lesson-body h3 { color: var(--text); font-size: 1.4rem; margin: 2rem 0 0.65rem; }
+.lesson-body p { margin-bottom: 1.1rem; font-size: 1rem; line-height: 1.9; }
 .lesson-body strong { color: var(--text); font-weight: 600; }
 .lesson-body em { color: var(--gold); font-style: italic; }
-.lesson-body code { font-family: 'JetBrains Mono', monospace; font-size: 0.8em; padding: 2px 7px; border-radius: 4px; background: rgba(232,160,32,0.1); color: var(--gold-light); }
-.lesson-body hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
-.lesson-body ul { margin: 0.5rem 0 1rem; padding: 0; list-style: none; }
-.lesson-body li { display: flex; gap: 10px; margin-bottom: 6px; color: #C8C0B4; }
-.lesson-body li::before { content: '▸'; color: var(--gold); flex-shrink: 0; margin-top: 2px; }
-.lesson-body table { width: 100%; border-collapse: collapse; margin: 1.25rem 0; font-size: 0.875rem; }
-.lesson-body th { background: rgba(232,160,32,0.08); color: var(--text); font-weight: 600; padding: 10px 14px; text-align: left; border: 1px solid var(--border); }
-.lesson-body td { padding: 9px 14px; border: 1px solid var(--border); color: #B0A898; }
+.lesson-body code { font-family: 'JetBrains Mono', monospace; font-size: 0.85em; padding: 2px 8px; border-radius: 4px; background: rgba(232,160,32,0.1); color: var(--gold-light); }
+.lesson-body hr { border: none; border-top: 1px solid var(--border); margin: 2.5rem 0; }
+.lesson-body ul { margin: 0.75rem 0 1.25rem; padding: 0; list-style: none; }
+.lesson-body li { display: flex; gap: 12px; margin-bottom: 10px; color: #C8C0B4; font-size: 1rem; line-height: 1.75; }
+.lesson-body li::before { content: '▸'; color: var(--gold); flex-shrink: 0; margin-top: 3px; }
+.lesson-body table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; font-size: 0.9rem; }
+.lesson-body th { background: rgba(232,160,32,0.08); color: var(--text); font-weight: 600; padding: 11px 16px; text-align: left; border: 1px solid var(--border); font-size: 0.9rem; }
+.lesson-body td { padding: 10px 16px; border: 1px solid var(--border); color: #B8B0A4; font-size: 0.9rem; line-height: 1.65; }
 .lesson-body tr:hover td { background: rgba(255,255,255,0.02); }
+
+/* ─── Code blocks in lessons ────────────────── */
+.lesson-body pre.code-block {
+  background: #08111F;
+  border: 1px solid rgba(255,255,255,0.09);
+  border-left: 3px solid var(--gold);
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+  overflow-x: auto;
+  margin: 1.5rem 0;
+  position: relative;
+}
+.lesson-body pre.code-block::before {
+  content: attr(data-lang);
+  position: absolute;
+  top: 8px; right: 12px;
+  font-size: 0.7rem;
+  font-family: 'JetBrains Mono', monospace;
+  color: rgba(232,160,32,0.45);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.lesson-body pre.code-block code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.7;
+  color: #C8E6FF;
+  background: none;
+  padding: 0;
+  white-space: pre;
+}
+
+/* ─── Scenario callout ──────────────────────── */
+.lesson-body .scenario-box {
+  background: rgba(46,196,182,0.06);
+  border: 1px solid rgba(46,196,182,0.2);
+  border-left: 3px solid #2EC4B6;
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  margin: 1.5rem 0;
+}
 
 /* ─── Keyframes ─────────────────────────────── */
 @keyframes blobFloat {
