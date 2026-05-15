@@ -1,0 +1,6 @@
+{
+  "regions": ["ams1"],
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "framework": "vite"
+}
