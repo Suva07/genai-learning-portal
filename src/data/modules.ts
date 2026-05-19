@@ -623,7 +623,269 @@ Trained at a fraction of the compute cost of comparable US models. R1 variant sp
 | Multimodal input | GPT-4o or Gemini 2.0 |
 
 > 📍 **Dutch enterprise reality:** ING uses Claude for internal document processing (EU data agreements in place). ASML runs a self-hosted Llama variant for IP-sensitive R&D queries. Booking.com uses GPT-4o for customer-facing features. Most companies run a mix based on data sensitivity, cost, latency, and capability requirements — not a single model for everything.`
-      }
+      },
+      {
+        id: 'prompt-engineering',
+        title: 'Practical Prompt Engineering',
+        duration: '25 min',
+        content: `## Prompt Engineering is Not Voodoo
+
+Prompt engineering is the art of specifying *exactly* what you want from an LLM. It is deterministic engineering, not magic. Done well, it eliminates entire categories of failures before you write a single line of fine-tuning code.
+
+The industry has learned (expensively) that the right order of iteration is:
+1. Prompt engineering first
+2. RAG if the problem is knowledge/factual accuracy
+3. Fine-tuning last, only when prompting + RAG cannot close the gap
+
+This lesson covers the practical techniques that show up in production AI systems and technical interviews.
+
+---
+
+## System Prompt Architecture
+
+A well-structured system prompt has four distinct sections. Skipping any of them is the most common cause of inconsistent LLM behaviour.
+
+~~~python
+SYSTEM_PROMPT = """## Role
+You are a senior mortgage advisor at ING Netherlands. You have 10 years of experience explaining Dutch mortgage regulations to first-time home buyers.
+
+## Context
+Today's date is {date}. The user is a prospective home buyer. All advice must comply with AFM guidelines and ING's 2025 mortgage policy.
+
+## Constraints
+- ONLY answer questions about mortgages, home buying, and Dutch property regulations
+- If the user asks about topics outside this scope, politely redirect them
+- NEVER state specific interest rates — they change daily. Direct users to ing.nl/hypotheek for current rates
+- If you are uncertain about a regulatory detail, say so explicitly and recommend they speak with a certified advisor
+- Respond in the same language the user writes in (Dutch or English)
+
+## Output Format
+- Use plain language. Avoid jargon unless you immediately define it
+- For multi-step processes, use numbered lists
+- Keep responses under 300 words unless a detailed explanation is explicitly requested
+"""
+~~~
+
+**Why each section matters:**
+- **Role** — sets the persona. The LLM adjusts tone, vocabulary, and domain expertise. "Senior mortgage advisor" produces different output than "helpful assistant."
+- **Context** — injects facts the LLM needs that are not in its weights (today's date, user's situation, product version)
+- **Constraints** — defines the *out-of-scope* boundary. Without explicit constraints, LLMs will helpfully answer questions you never intended them to
+- **Output format** — the most underused section. Specifying format reduces post-processing and improves user experience dramatically
+
+---
+
+## Few-Shot Examples: When They Help
+
+Few-shot prompting provides example input-output pairs inside the prompt. The LLM learns the *pattern* you want without fine-tuning.
+
+**When few-shot helps:**
+- The output format is non-standard (e.g., structured JSON with unusual field names)
+- The tone is very specific (formal Dutch legal language, casual support chat)
+- The task involves classification with ambiguous labels
+
+**When few-shot does NOT help:**
+- Adding knowledge the model does not have (use RAG instead)
+- Teaching complex new skills (use fine-tuning instead)
+- You only have 1 example — 1-shot is often worse than zero-shot
+
+~~~python
+FEW_SHOT_PROMPT = """Classify the following customer support message as: MORTGAGE | SAVINGS | PAYMENTS | OUT_OF_SCOPE
+
+Examples:
+Message: "Ik wil mijn hypotheekrente herzien na 10 jaar"
+Category: MORTGAGE
+
+Message: "How do I set up iDEAL for recurring payments?"
+Category: PAYMENTS
+
+Message: "What is the current AEX index?"
+Category: OUT_OF_SCOPE
+
+Message: "Can I open a business savings account?"
+Category: SAVINGS
+
+Now classify:
+Message: "{customer_message}"
+Category:"""
+~~~
+
+**Practical tip:** Vary your examples. If all your MORTGAGE examples are about interest rates, the model over-generalises "mortgage" to mean "interest rate question."
+
+---
+
+## Chain-of-Thought Prompting
+
+For reasoning tasks — math, logic, multi-step decisions — asking the LLM to *show its work* dramatically improves accuracy. The model cannot skip steps it has already written down.
+
+### Zero-shot CoT
+
+~~~python
+# Without CoT
+prompt = "A customer earns €85,000/year gross. Their monthly car loan payment is €400. What is their maximum monthly mortgage payment under the ING 4.5x income rule?"
+
+# With zero-shot CoT — just add this phrase:
+prompt += "\n\nThink through this step by step before giving the final answer."
+
+# The model now writes out: annual income → max mortgage → subtract obligations → monthly payment
+# Accuracy on numerical reasoning improves ~30-40% with this single addition
+~~~
+
+### Multi-Step CoT for Complex Decisions
+
+~~~python
+UNDERWRITING_PROMPT = """You are an ING mortgage underwriting assistant. Evaluate whether this application meets our lending criteria.
+
+Applicant:
+- Gross annual income: €92,000
+- Existing monthly obligations: €650 (car lease + student loan)
+- Requested mortgage: €420,000
+- Property value: €440,000 (LTV: 95.5%)
+
+ING Lending Rules:
+- Maximum loan: 4.5x gross annual income
+- Maximum LTV: 100% for primary residences
+- Maximum monthly obligations (including new mortgage): 35% of gross monthly income
+- Interest rate used for stress test: 5.0% over 30 years
+
+Please evaluate step by step:
+1. Maximum loan by income rule
+2. LTV compliance check
+3. Monthly payment at stress-test rate
+4. Affordability check (35% of gross monthly)
+5. Final decision: APPROVED / CONDITIONALLY APPROVED / DECLINED
+
+Show all calculations."""
+~~~
+
+---
+
+## Structured Output with Pydantic
+
+Parsing free-text LLM responses in production is fragile. Use structured output — the LLM fills in a schema you define, and you get a Python object back, not a string.
+
+~~~python
+from pydantic import BaseModel, Field
+from openai import OpenAI
+from typing import Literal
+
+client = OpenAI()
+
+class MortgageDecision(BaseModel):
+    decision: Literal["APPROVED", "CONDITIONALLY_APPROVED", "DECLINED"]
+    max_loan_by_income: float = Field(description="4.5x gross annual income")
+    ltv_compliant: bool
+    monthly_payment_stress: float = Field(description="Monthly payment at 5% stress rate, euros")
+    affordability_ok: bool
+    reasoning: str = Field(description="2-3 sentence plain-language explanation for the applicant")
+    conditions: list[str] = Field(default=[], description="Any conditions attached to approval")
+
+response = client.beta.chat.completions.parse(
+    model="gpt-4o",
+    messages=[
+        {"role": "system", "content": "You are an ING mortgage underwriting assistant."},
+        {"role": "user", "content": UNDERWRITING_PROMPT}
+    ],
+    response_format=MortgageDecision,  # enforces schema
+)
+
+decision = response.choices[0].message.parsed
+print(f"Decision: {decision.decision}")
+print(f"Max loan: €{decision.max_loan_by_income:,.0f}")
+print(f"Reasoning: {decision.reasoning}")
+# All fields guaranteed to be the right type — no parsing, no KeyError
+~~~
+
+**Why this matters in production:** Without structured output, you write fragile regex parsers that break when the model's phrasing changes. With Pydantic + <code>response_format</code>, you get a validated Python object every time. Required fields are always present. Enum fields never have typos. Downstream code is clean.
+
+---
+
+## XML Tags for Complex Prompts (Anthropic Style)
+
+When your prompt has multiple distinct sections — instructions, examples, context, user input — XML tags prevent the model from confusing one section for another.
+
+~~~python
+DOCUMENT_ANALYSER_PROMPT = """Analyse the contract clause below and identify any risks for the buyer.
+
+<instructions>
+- Focus on: liability caps, termination rights, indemnification clauses, governing law
+- Rate each risk: LOW | MEDIUM | HIGH
+- If you cannot determine risk level from the clause alone, say UNCLEAR and explain what additional context is needed
+- Do not add legal advice beyond what is explicitly stated
+</instructions>
+
+<examples>
+<example>
+<clause>Either party may terminate this agreement with 30 days written notice.</clause>
+<analysis>Risk: LOW. Standard termination clause. Buyer retains exit rights.</analysis>
+</example>
+</examples>
+
+<contract_clause>
+{clause_text}
+</contract_clause>
+
+Provide your analysis:"""
+~~~
+
+XML tagging is especially effective with Claude models, which are explicitly trained to respect XML structure in prompts.
+
+---
+
+## Prompt Testing: Build a Dataset, Not Intuition
+
+The single most important professional habit: **test your prompts on a dataset, not on a few cherry-picked examples.**
+
+~~~python
+import pandas as pd
+from openai import OpenAI
+
+client = OpenAI()
+
+# Your test cases — 30-50 minimum for any production prompt
+test_cases = pd.read_csv("prompt_test_cases.csv")
+# Columns: input, expected_output, expected_category, notes
+
+results = []
+for _, row in test_cases.iterrows():
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT.format(date="2025-11-15")},
+            {"role": "user", "content": row["input"]}
+        ],
+        temperature=0,   # deterministic for testing
+    )
+    output = response.choices[0].message.content
+    results.append({
+        "input": row["input"],
+        "expected": row["expected_output"],
+        "actual": output,
+        "pass": row["expected_category"].lower() in output.lower()
+    })
+
+df = pd.DataFrame(results)
+print(f"Pass rate: {df['pass'].mean():.1%}")
+print(df[~df["pass"]][["input", "expected", "actual"]])  # review failures
+~~~
+
+**Rule:** Never ship a prompt change without running it on your test set. Prompts that improve performance on your favourite example often regress on edge cases.
+
+---
+
+## Common Anti-Patterns
+
+**"Be helpful, accurate, and concise"** — every LLM already tries to do this. It adds nothing. Write constraints, not platitudes.
+
+**Conflating knowledge and instructions** — "You know that our refund policy is 30 days" does not reliably inject knowledge. The model may ignore it under context pressure. Use RAG for facts you want reliably grounded.
+
+**No output format specification** — "Summarise this document" will produce wildly different structures on each call. Always specify: length, structure, sections, tone.
+
+**Temperature = 1 in production** — default temperature is fine for creative tasks, but for classification, structured output, or any task with a correct answer, set temperature=0 for determinism.
+
+**Over-constraining** — a 2000-token system prompt with 40 rules is hard for the model to follow entirely. Prioritise: write the 5 most important constraints clearly, not 40 vague ones.
+
+> 📍 **Adyen (Amsterdam):** Their dispute resolution assistant initially had a 1,800-token system prompt with 47 rules accumulated over 18 months. Analysis found that the model was violating the same 6 rules repeatedly while perfectly following 41 others. They rewrote the prompt to 400 tokens focused on those 6 critical constraints, added Pydantic structured output for the decision schema, and saw dispute classification accuracy improve from 76% to 91%. Less prompt, more structure, better results.`
+      },
     ]
   },
   {
@@ -1869,6 +2131,120 @@ result = agent_executor.invoke(
 
 ---
 
+## MLflow Traces: Observability Inside Your ML Platform
+
+If your organisation already uses MLflow for experiment tracking and model registry (as most data teams do), **MLflow Traces** (introduced in MLflow 2.14) adds LLM observability without a separate tool. Traces live alongside your experiments, model versions, and evaluation metrics — one pane of glass.
+
+MLflow auto-traces OpenAI, Anthropic, LangChain, LlamaIndex, DSPy, and more with a single line.
+
+~~~python
+import mlflow
+from openai import OpenAI
+
+# Enable auto-tracing — captures every prompt, response, token count, latency
+mlflow.openai.autolog()
+
+client = OpenAI()
+
+with mlflow.start_run(run_name="policy-assistant-v2"):
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "You are a Dutch banking policy assistant."},
+            {"role": "user", "content": "What is the LTV cap for residential mortgages?"}
+        ],
+    )
+    # MLflow records: full prompt, full response, model, input tokens, output tokens, latency
+~~~
+
+**Auto-tracing for LangChain and RAG pipelines:**
+
+~~~python
+import mlflow
+
+mlflow.langchain.autolog()
+
+# Every retrieval step, LLM call, tool invocation is now a span
+result = rag_chain.invoke({"question": "What documents do I need for an ING business account?"})
+# Trace tree: [RAG Chain] -> [Retriever] -> [LLM] -> [Output Parser]
+~~~
+
+**Custom spans: trace your own business logic:**
+
+~~~python
+import mlflow
+from mlflow.entities import SpanType
+
+@mlflow.trace(name="document_retrieval", span_type=SpanType.RETRIEVAL)
+def retrieve_policy_docs(query: str, k: int = 5) -> list:
+    results = vectorstore.similarity_search(query, k=k)
+    return [{"text": r.page_content, "score": r.metadata.get("score")} for r in results]
+
+@mlflow.trace(name="rerank", span_type=SpanType.RERANKER)
+def rerank_docs(query: str, docs: list) -> list:
+    scores = reranker.predict([(query, d["text"]) for d in docs])
+    return [d for _, d in sorted(zip(scores, docs), reverse=True)][:5]
+
+@mlflow.trace(name="policy_assistant", span_type=SpanType.CHAIN)
+def answer_question(question: str) -> str:
+    docs = retrieve_policy_docs(question)    # child span
+    reranked = rerank_docs(question, docs)   # child span
+    return generate_answer(question, reranked)  # child span
+
+# Result: nested trace showing every step with latency and I/O
+with mlflow.start_run():
+    answer = answer_question("What is the minimum down payment for a first property?")
+~~~
+
+**Built-in LLM evaluation tied to traces:**
+
+~~~python
+import mlflow
+from mlflow.metrics.genai import faithfulness, answer_relevance, answer_correctness
+
+eval_df = pd.DataFrame({
+    "inputs":   ["What is the LTV cap?", "What ID is needed for KYC?"],
+    "outputs":  [predicted_answer_1, predicted_answer_2],
+    "context":  [retrieved_context_1, retrieved_context_2],
+    "targets":  [ground_truth_1, ground_truth_2],
+})
+
+with mlflow.start_run(run_name="rag-eval-weekly"):
+    eval_results = mlflow.evaluate(
+        data=eval_df,
+        model_type="question-answering",
+        targets="targets",
+        extra_metrics=[
+            faithfulness(),        # is the answer grounded in context?
+            answer_relevance(),    # does it address the question?
+            answer_correctness()   # matches ground truth?
+        ],
+        evaluator_config={"col_mapping": {"inputs": "inputs", "context": "context"}}
+    )
+
+    print(eval_results.metrics)
+    # faithfulness/v1/mean:       0.91
+    # answer_relevance/v1/mean:   0.86
+    # answer_correctness/v1/mean: 0.79
+~~~
+
+**MLflow UI: what explainability looks like in practice.** For each trace you see: the exact system prompt and user message, every retrieved chunk and its similarity score, the reranker scores, the final LLM response, token-by-token latency, and total cost. When an engineer reports a wrong answer, you open the trace, see which chunk was retrieved (or missed), and diagnose in 2 minutes what previously took 2 hours of log trawling.
+
+**MLflow Traces vs Langfuse — choose based on your stack:**
+
+| | MLflow Traces | Langfuse |
+|---|---|---|
+| Best for | Teams using MLflow/Databricks for ML | Pure LLM application teams |
+| Model lifecycle integration | Full (experiments, registry, deployment) | Prompt management only |
+| Self-hosted | Yes (open-source) | Yes (open-source) |
+| Managed cloud | Databricks (paid) | Langfuse Cloud (free tier) |
+| Eval framework | <code>mlflow.evaluate()</code> built-in | RAGAS integration |
+| UI focus | Experiment and run comparison | Conversation and trace-centric |
+
+> 📍 **ASML (Eindhoven):** Their semiconductor process knowledge assistant runs on Databricks. Every LLM call, retrieval span, and re-ranking step is traced with MLflow. When an engineer reports a factually wrong answer about an EUV process parameter, the team opens the trace in the Databricks MLflow UI, sees which chunks were retrieved (and that the correct chunk ranked 8th, below the retrieval cutoff), then adjusts the retrieval K and re-ranking threshold. The fix is validated by running <code>mlflow.evaluate()</code> on their 300-question golden test set — all inside one platform without switching tools.
+
+---
+
 ## AI Gateways: The Traffic Control Layer for LLMs
 
 An **AI Gateway** sits between your application and every LLM API. Think of it as an API gateway (like Kong or NGINX) but purpose-built for the unique challenges of LLM traffic.
@@ -2682,6 +3058,308 @@ Revised response:"""
 | **ALHF (active)** | Low | Medium | Very good | Complex sample selection |
 
 > 📍 **Real deployment:** Every major LLM uses a combination. Claude uses Constitutional AI plus RLHF. GPT-4 uses RLHF with RLAIF augmentation for scale. Llama-based models in production are typically SFT-plus-DPO fine-tuned on community preference datasets (HH-RLHF, UltraFeedback). The *data* — who wrote it, what principles guided labelling, whose values it reflects — matters as much as which algorithm you choose.`
+      },
+      {
+        id: 'finetuning-lora',
+        title: 'Fine-tuning with LoRA & QLoRA',
+        duration: '35 min',
+        content: `## When to Fine-Tune (and When Not To)
+
+Fine-tuning is the most misused technique in applied LLM engineering. It is powerful but expensive, slow, and easy to get wrong. Before you fine-tune anything, work through this decision matrix:
+
+| Problem | Right solution | Why |
+|---------|---------------|-----|
+| LLM doesn't know recent facts | RAG | Fine-tuning bakes in stale knowledge |
+| LLM gives wrong answers on domain docs | RAG | The knowledge is in your docs, not the weights |
+| LLM ignores format instructions | Prompt engineering | Structured output / better system prompt |
+| LLM uses wrong tone / persona | Prompt engineering (mostly) | Few-shot examples cover most cases |
+| LLM is too slow / expensive for task | Model routing or quantisation | Distillation or smaller model |
+| LLM cannot follow a *very specific* output schema reliably | Fine-tuning | Prompt + structured output fails at edge cases |
+| You need a domain-specific *style* the base model does not have | Fine-tuning | Dutch legal language, medical notation |
+| You need the model to reliably refuse specific topics | Fine-tuning | Safety alignment for your specific use case |
+
+**The 90% rule:** 90% of production LLM problems are solved with better prompts, RAG, or structured output. Fine-tuning is the right choice for the remaining 10% — and doing it wrong is worse than not doing it at all.
+
+---
+
+## LoRA: Low-Rank Adaptation Explained
+
+A pre-trained LLM has billions of parameters. Full fine-tuning updates *all* of them — computationally and financially prohibitive for most teams. **LoRA** (Low-Rank Adaptation) is the insight that:
+
+*You do not need to update all weights. You only need to add a small set of update weights on top of the frozen original weights.*
+
+**The math (intuitively):** A weight matrix W (say, 4096 × 4096 = 16M parameters) can be approximated as W + ΔW, where ΔW is decomposed into two small matrices: A (4096 × r) and B (r × 4096), where r is the *rank* (typically 8–64). Instead of updating 16M parameters, you only train 2 × 4096 × 16 = 131K parameters (with rank=16). That is 99.2% fewer trainable parameters.
+
+~~~python
+from peft import LoraConfig, get_peft_model, TaskType
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+# Load base model
+model = AutoModelForCausalLM.from_pretrained(
+    "meta-llama/Llama-3.1-8B-Instruct",
+    torch_dtype="auto",
+    device_map="auto",
+)
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")
+
+# Apply LoRA: only these modules get trained
+lora_config = LoraConfig(
+    task_type=TaskType.CAUSAL_LM,
+    r=16,                          # rank — higher = more capacity, more parameters
+    lora_alpha=32,                 # scaling factor (usually 2x rank)
+    lora_dropout=0.05,
+    target_modules=[               # which attention matrices to adapt
+        "q_proj", "k_proj", "v_proj", "o_proj",
+        "gate_proj", "up_proj", "down_proj"
+    ],
+    bias="none",
+)
+
+model = get_peft_model(model, lora_config)
+model.print_trainable_parameters()
+# trainable params: 41,943,040 || all params: 8,072,220,672 || trainable: 0.52%
+# Only 0.52% of weights are trained. The original weights are frozen.
+~~~
+
+---
+
+## QLoRA: Fine-Tune on a Single Consumer GPU
+
+**QLoRA** combines LoRA with 4-bit quantisation of the base model. The frozen base model is stored in 4-bit (NF4) precision instead of 16-bit, cutting memory by 4×. A Llama 3.1 8B model that needs 16GB in fp16 fits in ~5GB in NF4 — a consumer RTX 3090 or Google Colab A100 can fine-tune it.
+
+~~~python
+from transformers import BitsAndBytesConfig
+import torch
+
+# QLoRA: load model in 4-bit
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",          # NormalFloat4: optimal for normally distributed weights
+    bnb_4bit_compute_dtype=torch.bfloat16,
+    bnb_4bit_use_double_quant=True,     # quantise the quantisation constants too (saves ~0.4 GB)
+)
+
+model = AutoModelForCausalLM.from_pretrained(
+    "meta-llama/Llama-3.1-8B-Instruct",
+    quantization_config=bnb_config,
+    device_map="auto",
+)
+
+# Then apply LoRA on top of the quantised model — same as before
+model = get_peft_model(model, lora_config)
+
+# Memory usage comparison:
+# Full fine-tune fp16:  ~130 GB (requires 2x H100)
+# LoRA fp16:           ~18 GB  (requires A100 40GB)
+# QLoRA 4-bit:         ~6 GB   (runs on RTX 3090 or free Colab T4)
+~~~
+
+---
+
+## Data Format: What Your Training Data Must Look Like
+
+The quality of your fine-tuning data is 10× more important than hyperparameters. **"Garbage in, garbage out" is twice as true for fine-tuning.**
+
+**ShareGPT format** (the standard for instruction fine-tuning):
+
+~~~python
+training_examples = [
+    {
+        "conversations": [
+            {
+                "role": "system",
+                "content": "You are a Dutch mortgage advisor at ING. Answer questions clearly and in compliance with AFM regulations."
+            },
+            {
+                "role": "user",
+                "content": "Wat is de maximale hypotheek die ik kan krijgen als ik €75.000 bruto per jaar verdien?"
+            },
+            {
+                "role": "assistant",
+                "content": "Op basis van de ING-norm van 4,5 keer uw bruto jaarsalaris kunt u een hypotheek aanvragen van maximaal €337.500. Dit is een indicatie — de definitieve berekening hangt af van uw overige financiële verplichtingen, de actuele rentestand, en een volledige inkomenstoets door onze adviseurs. Wilt u een vrijblijvend gesprek inplannen?"
+            }
+        ]
+    },
+    # ... 500+ more examples
+]
+~~~
+
+**Data quality checklist before training:**
+- Minimum 200 examples (500+ preferred for meaningful style adaptation)
+- Cover all the edge cases and refusal scenarios you care about
+- Representative of real user queries — not just your happy path
+- Consistent tone and format throughout
+- No contradictions between examples
+
+**Creating training data efficiently:**
+
+~~~python
+from openai import OpenAI
+
+client = OpenAI()
+
+# GPT-4o generates draft training data; human reviews and corrects
+def generate_training_example(scenario: str, correct_answer: str) -> dict:
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "Generate a realistic Dutch customer question that would elicit this answer from a mortgage advisor."},
+            {"role": "user", "content": f"Answer: {correct_answer}\nScenario context: {scenario}"}
+        ],
+        temperature=0.8,
+    )
+    question = response.choices[0].message.content
+
+    return {
+        "conversations": [
+            {"role": "system", "content": MORTGAGE_SYSTEM_PROMPT},
+            {"role": "user", "content": question},
+            {"role": "assistant", "content": correct_answer}
+        ]
+    }
+~~~
+
+---
+
+## Training with SFTTrainer
+
+~~~python
+from trl import SFTConfig, SFTTrainer
+from datasets import Dataset
+
+# Prepare dataset
+train_dataset = Dataset.from_list(training_examples)
+
+training_args = SFTConfig(
+    output_dir="./llama-mortgage-advisor",
+    num_train_epochs=3,
+    per_device_train_batch_size=2,
+    gradient_accumulation_steps=4,     # effective batch size = 2 x 4 = 8
+    learning_rate=2e-4,                # higher than pre-training; LoRA can handle it
+    warmup_ratio=0.1,
+    lr_scheduler_type="cosine",
+    fp16=False,
+    bf16=True,                         # use bfloat16 for Ampere+ GPUs (A100, 3090)
+    logging_steps=10,
+    save_strategy="epoch",
+    max_seq_length=2048,
+)
+
+trainer = SFTTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_dataset,
+    processing_class=tokenizer,
+)
+
+trainer.train()
+
+# Save only the LoRA adapter weights (not the full model — much smaller)
+model.save_pretrained("./llama-mortgage-advisor-lora")
+tokenizer.save_pretrained("./llama-mortgage-advisor-lora")
+# Saved: ~80 MB adapter file, not 16 GB model
+~~~
+
+**Merging LoRA weights for inference** (optional — for deployment without PEFT overhead):
+
+~~~python
+from peft import PeftModel
+
+base_model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.1-8B-Instruct", ...)
+merged_model = PeftModel.from_pretrained(base_model, "./llama-mortgage-advisor-lora")
+merged_model = merged_model.merge_and_unload()  # fuses LoRA into base weights permanently
+merged_model.save_pretrained("./llama-mortgage-advisor-merged")
+~~~
+
+---
+
+## Evaluating Your Fine-Tuned Model
+
+**Never deploy without before/after comparison.** Three evaluation layers:
+
+~~~python
+# Layer 1: Perplexity on held-out set (lower = better fit to training distribution)
+from evaluate import load
+perplexity = load("perplexity", module_type="metric")
+
+base_ppl = perplexity.compute(model_id="meta-llama/Llama-3.1-8B-Instruct", predictions=test_texts)
+ft_ppl   = perplexity.compute(model_id="./llama-mortgage-advisor-merged", predictions=test_texts)
+print(f"Base model perplexity: {base_ppl['mean_perplexity']:.1f}")
+print(f"Fine-tuned perplexity: {ft_ppl['mean_perplexity']:.1f}")
+
+# Layer 2: Task accuracy on your golden test set
+correct = 0
+for example in test_examples:
+    ft_response   = generate(fine_tuned_model, example["question"])
+    base_response = generate(base_model, example["question"])
+
+    # LLM judge comparison
+    judge_result = llm_judge_compare(example["question"], ft_response, base_response)
+    if judge_result["winner"] == "fine-tuned":
+        correct += 1
+
+print(f"Fine-tuned wins: {correct}/{len(test_examples)}")
+
+# Layer 3: Regression check — did we break anything?
+refusal_rate_base = test_refusals(base_model, out_of_scope_queries)
+refusal_rate_ft   = test_refusals(fine_tuned_model, out_of_scope_queries)
+print(f"Refusal rate (base): {refusal_rate_base:.1%}")
+print(f"Refusal rate (fine-tuned): {refusal_rate_ft:.1%}")
+# A drop in refusal rate means fine-tuning over-wrote safety behaviour — dangerous
+~~~
+
+---
+
+## DPO: Preference Fine-Tuning Without a Reward Model
+
+Once you have a supervised fine-tuned (SFT) model, you can further align it with human preferences using **DPO** (Direct Preference Optimisation) — the technique described in the Alignment module — without a separate reward model.
+
+~~~python
+from trl import DPOConfig, DPOTrainer
+
+# DPO dataset: each example has a prompt, a chosen response, a rejected response
+dpo_dataset = Dataset.from_list([
+    {
+        "prompt": "What is the maximum LTV for a second property?",
+        "chosen": "For a second (investment) property, ING applies a maximum LTV of 90% of the market value. This means you need at least 10% own funds. The exact cap may vary based on the property's rental income potential.",
+        "rejected": "You can borrow up to 100% for any property. Just apply and we will assess your case."
+        # rejected is incorrect (100% LTV applies only to primary residences) and potentially harmful
+    },
+    # ... more preference pairs
+])
+
+dpo_trainer = DPOTrainer(
+    model=sft_model,            # start from your SFT model, not base model
+    ref_model=sft_model_ref,    # frozen reference copy
+    args=DPOConfig(
+        beta=0.1,               # KL divergence penalty strength; higher = more conservative
+        learning_rate=5e-5,
+        num_train_epochs=1,     # DPO needs less data and fewer epochs than SFT
+    ),
+    train_dataset=dpo_dataset,
+    processing_class=tokenizer,
+)
+
+dpo_trainer.train()
+~~~
+
+**What DPO achieves that SFT alone cannot:** SFT teaches the model to produce correct outputs. DPO teaches it to *prefer* correct outputs over plausible-sounding incorrect ones — directly addressing the hallucination problem at the weight level.
+
+---
+
+## Common Fine-Tuning Mistakes
+
+**Catastrophic forgetting** — training too long on a small domain dataset can cause the model to forget general capabilities. Fix: lower learning rate, fewer epochs, check with a general-capability benchmark.
+
+**Training on base model instead of instruct model** — always start from the instruct/chat variant (Llama-3.1-8B-*Instruct*, not Llama-3.1-8B). The instruct model already knows the chat format; the base model does not.
+
+**Not including negative examples** — if you only train on examples of what the model *should* do, it becomes over-eager. Include examples of graceful refusals and boundary handling.
+
+**Skipping the regression test** — fine-tuning for tone/style can subtly degrade safety behaviour. Always test refusal rates before and after.
+
+**Treating fine-tuning as a one-time event** — as your product evolves, your training data goes stale. Build a feedback loop: collect production outputs, have humans annotate quality weekly, retrain quarterly.
+
+> 📍 **Weaviate (Amsterdam):** Their technical support assistant was initially pure RAG over documentation. After six months, they identified that 15% of queries required a very specific response style — step-by-step code corrections with Weaviate's Python client syntax — that their base model (GPT-4o-mini) consistently got slightly wrong (using deprecated v3 API syntax instead of v4). Fine-tuning on 600 human-corrected examples with QLoRA brought v4-API-correct responses from 71% to 96%. RAG still provides the context; the fine-tuned model knows exactly how to *use* that context to write correct Weaviate Python code.`
       }
     ]
   }

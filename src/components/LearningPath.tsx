@@ -21,18 +21,21 @@ const phases = [
     ]
   },
   {
-    phase: 'Phase II', title: 'Language Models', color: '#F77F00', moduleId: 'genai-llms',
-    icon: '✦', totalTime: '36 min',
+    phase: 'Phase II', title: 'Language Models & Prompting', color: '#F77F00', moduleId: 'genai-llms',
+    icon: '✦', totalTime: '61 min',
     outcomes: [
       'Explain tokenisation, temperature, and sampling to any engineer',
       'Describe the Transformer architecture and why attention changed everything',
       'Compare GPT-4, Claude, Gemini, Llama and choose the right model for a use-case',
+      'Write production-quality system prompts with role, context, constraints, and format sections',
+      'Use chain-of-thought, few-shot, and structured output (Pydantic) to eliminate output parsing',
     ],
-    skills: ['Tokenisation', 'Transformers', 'Attention', 'Prompt Engineering', 'Model Selection'],
+    skills: ['Tokenisation', 'Transformers', 'Attention', 'System Prompts', 'Few-shot', 'Chain-of-Thought', 'Structured Output', 'Model Selection'],
     lessons: [
       { id: 'what-is-generative', moduleId: 'genai-llms', icon: '✦', title: 'What is Generative AI?', time: '8 min', desc: 'Tokens, sampling, temperature — the generative loop unpacked' },
       { id: 'transformers', moduleId: 'genai-llms', icon: '⟳', title: 'Transformers & Attention', time: '18 min', desc: 'Self-attention, positional encoding, the architecture behind GPT' },
       { id: 'famous-models', moduleId: 'genai-llms', icon: '★', title: 'The Model Landscape', time: '10 min', desc: 'GPT-4o, Claude 4, Gemini, Llama 3, Mistral — compared honestly' },
+      { id: 'prompt-engineering', moduleId: 'genai-llms', icon: '◎', title: 'Practical Prompt Engineering', time: '25 min', desc: 'System prompt architecture, CoT, few-shot, Pydantic structured output, prompt testing' },
     ]
   },
   {
@@ -80,22 +83,25 @@ const phases = [
     skills: ['ReAct Loop', 'Tool Use', 'LangGraph', 'LLMOps', 'AI Gateway', 'LiteLLM', 'Semantic Cache', 'RAGAS', 'LLM Judge', 'HITL Eval'],
     lessons: [
       { id: 'what-are-agents', moduleId: 'agents-workflows', icon: '⬢', title: 'AI Agents & Workflows', time: '25 min', desc: 'ReAct, tools, planning, multi-agent systems & failure modes' },
-      { id: 'llmops-gateway', moduleId: 'agents-workflows', icon: '◎', title: 'LLMOps & AI Gateways', time: '30 min', desc: 'Observability, LiteLLM routing, semantic caching, cost control & prompt versioning' },
+      { id: 'llmops-gateway', moduleId: 'agents-workflows', icon: '◎', title: 'LLMOps & AI Gateways', time: '30 min', desc: 'Langfuse + MLflow tracing, LiteLLM routing, semantic caching, cost control & prompt versioning' },
       { id: 'evaluation-metrics', moduleId: 'agents-workflows', icon: '⚖', title: 'Evaluation, Metrics & LLM Judges', time: '30 min', desc: 'RAGAS pipeline, LLM-as-judge, human-in-the-loop, continuous eval in CI/CD' },
     ]
   },
   {
-    phase: 'Phase VI', title: 'Alignment & Safety', color: '#E05A4E', moduleId: 'alignment',
-    icon: '◉', totalTime: '37 min',
+    phase: 'Phase VI', title: 'Alignment, Safety & Fine-tuning', color: '#E05A4E', moduleId: 'alignment',
+    icon: '◉', totalTime: '72 min',
     outcomes: [
       'Explain the alignment problem and why it matters for production AI systems',
       'Describe RLHF, RLAIF, Constitutional AI, and DPO with Python code examples',
-      'Apply DPO fine-tuning to a custom model using the TRL library',
+      'Decide when to fine-tune vs use RAG vs prompt engineering (the decision matrix)',
+      'Fine-tune Llama 3.1 8B on a single GPU using QLoRA and the TRL SFTTrainer',
+      'Apply DPO preference alignment to reduce hallucination at the weight level',
     ],
-    skills: ['RLHF', 'RLAIF', 'Constitutional AI', 'DPO', 'Red-teaming', 'Responsible AI'],
+    skills: ['RLHF', 'RLAIF', 'Constitutional AI', 'DPO', 'LoRA', 'QLoRA', 'PEFT', 'SFTTrainer', 'Fine-tuning Eval'],
     lessons: [
       { id: 'why-alignment', moduleId: 'alignment', icon: '⚠', title: 'Why Alignment Matters', time: '12 min', desc: 'Paperclip maximisers, Goodhart\'s Law, real-world failures' },
       { id: 'rlhf-rlaif', moduleId: 'alignment', icon: '⚖', title: 'RLHF, RLAIF, CAI & DPO', time: '25 min', desc: 'Teaching models to be helpful, harmless, honest — with code' },
+      { id: 'finetuning-lora', moduleId: 'alignment', icon: '◈', title: 'Fine-tuning with LoRA & QLoRA', time: '35 min', desc: 'When to fine-tune, LoRA math, QLoRA on single GPU, SFTTrainer, DPO, evaluation' },
     ]
   },
 ];
