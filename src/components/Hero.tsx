@@ -132,7 +132,7 @@ export default function Hero({ onNavigate }: HeroProps) {
         <div className="flex flex-wrap justify-center gap-3 mb-20">
           {[
             { value: '6', label: 'Deep Modules', color: '#00B4D8' },
-            { value: '35+', label: 'Lessons', color: '#9B5DE5' },
+            { value: '13', label: 'In-depth Lessons', color: '#9B5DE5' },
             { value: '20+', label: 'Interview Q&As', color: '#E8A020' },
             { value: '35+', label: 'Glossary Terms', color: '#2EC4B6' },
           ].map(s => (

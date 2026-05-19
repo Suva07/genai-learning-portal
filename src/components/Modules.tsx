@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { modules } from '../data/modules';
 
 interface ModulesProps {
   completedLessons: Set<string>;
   onComplete: (lessonId: string) => void;
+  jumpTo?: { module: string; lesson: string } | null;
+  onJumpComplete?: () => void;
 }
 
 const MOD_COLORS = ['#00B4D8', '#F77F00', '#9B5DE5', '#E8A020', '#2EC4B6', '#E05A4E'];
@@ -365,9 +367,18 @@ const VectorSearchDiagram = ({ color }: { color: string }) => {
   );
 };
 
-export default function Modules({ completedLessons, onComplete }: ModulesProps) {
+export default function Modules({ completedLessons, onComplete, jumpTo, onJumpComplete }: ModulesProps) {
   const [activeModule, setActiveModule] = useState<string | null>(null);
   const [activeLesson, setActiveLesson] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (jumpTo) {
+      setActiveModule(jumpTo.module);
+      setActiveLesson(jumpTo.lesson);
+      onJumpComplete?.();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [jumpTo]);
 
   if (activeLesson && activeModule) {
     const modIdx = modules.findIndex(m => m.id === activeModule);

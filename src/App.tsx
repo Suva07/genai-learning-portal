@@ -25,6 +25,7 @@ export default function App() {
     try { const s = localStorage.getItem(STORAGE_KEY); return s ? new Set(JSON.parse(s)) : new Set(); }
     catch { return new Set(); }
   });
+  const [jumpTo, setJumpTo] = useState<{ module: string; lesson: string } | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
 
@@ -43,6 +44,11 @@ export default function App() {
     setTab(t as Tab);
     setMobileOpen(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const navigateToLesson = (moduleId: string, lessonId: string) => {
+    setJumpTo({ module: moduleId, lesson: lessonId });
+    navigate('modules');
   };
 
   const navBg = tab === 'home'
@@ -87,7 +93,7 @@ export default function App() {
             style={{ background: 'rgba(232,160,32,0.08)', border: '1px solid rgba(232,160,32,0.15)' }}>
             <div className="w-1.5 h-1.5 rounded-full" style={{ background: '#E8A020' }} />
             <span className="text-xs font-mono" style={{ color: 'rgba(232,160,32,0.7)' }}>
-              {completedLessons.size}/11 done
+              {completedLessons.size}/13 done
             </span>
           </div>
 
@@ -119,8 +125,8 @@ export default function App() {
       {/* Page */}
       <main style={{ paddingTop: tab === 'home' ? 0 : 56 }}>
         {tab === 'home' && <Hero onNavigate={navigate} />}
-        {tab === 'path' && <LearningPath completedLessons={completedLessons} onNavigate={navigate} />}
-        {tab === 'modules' && <Modules completedLessons={completedLessons} onComplete={(id) => setCompletedLessons(p => new Set([...p, id]))} />}
+        {tab === 'path' && <LearningPath completedLessons={completedLessons} onNavigate={navigate} onNavigateToLesson={navigateToLesson} />}
+        {tab === 'modules' && <Modules completedLessons={completedLessons} onComplete={(id) => setCompletedLessons(p => new Set([...p, id]))} jumpTo={jumpTo} onJumpComplete={() => setJumpTo(null)} />}
         {tab === 'labs' && <Labs />}
         {tab === 'career' && <CareerHub />}
         {tab === 'glossary' && <Glossary />}

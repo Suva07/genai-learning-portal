@@ -1215,7 +1215,378 @@ print(results)
 - Low **context_precision** — retrieval is pulling in too many irrelevant chunks
 
 > 📍 **Booking.com (Amsterdam):** Their RAG pipeline answers property-specific questions over 500M+ reviews. "Does this hotel have a gym?" queries a vector index of review embeddings. Their nightly RAGAS evaluation runs caught that seasonal reviews (summer guests mentioning outdoor pools) degraded winter query precision by 15% — adding a recency-weighted metadata filter fixed it. Continuous evaluation is as important as the initial build.`
-      }
+      },
+      {
+        id: 'chunking-retrieval',
+        title: 'Chunking & Retrieval Strategies',
+        duration: '30 min',
+        content: `## The Chunk is Your Most Important Architectural Decision
+
+Most teams building RAG systems spend 80% of their time on the LLM and 20% on retrieval. Production experience reveals the inverse: the *quality of what you retrieve* determines the ceiling of your system. A perfect LLM cannot fix bad retrieval. A perfect retrieval strategy makes even a modest LLM look brilliant.
+
+The chunk — the unit of text you store and retrieve — is the fundamental building block. Get it wrong and no amount of prompt engineering saves you.
+
+---
+
+## Strategy 1: Fixed-Size Chunking
+
+The naïve approach: split every N tokens with an M-token overlap. Fast to implement, terrible for meaning.
+
+~~~python
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=512,        # tokens per chunk
+    chunk_overlap=64,      # overlap to avoid cutting mid-thought
+    separators=["\n\n", "\n", ". ", " ", ""]  # priority order
+)
+
+chunks = splitter.split_text(document_text)
+print(f"Created {len(chunks)} chunks, avg {sum(len(c) for c in chunks)/len(chunks):.0f} chars")
+~~~
+
+**When to use:** Quick prototypes, documents with homogeneous structure (legal boilerplate, product specs).
+
+**When it breaks:** Technical documentation with code blocks, PDFs where paragraphs span page boundaries, conversational text where topics shift mid-paragraph.
+
+> 📍 **ING (Amsterdam):** Fixed 512-token chunks on mortgage policy PDFs produced retrieval that split a key clause mid-sentence: "The property must be located in... [chunk break] ...the Netherlands or Belgium." Queries about property location requirements retrieved both halves separately — neither made sense alone. Switching to paragraph-aware chunking reduced split-clause retrievals by 73%.
+
+---
+
+## Strategy 2: Sentence-Aware Chunking
+
+Respect sentence boundaries. Group sentences until you reach a size threshold. Never split a sentence.
+
+~~~python
+import nltk
+from typing import List
+
+nltk.download('punkt', quiet=True)
+
+def sentence_aware_chunks(text: str, max_tokens: int = 400, overlap_sentences: int = 2) -> List[str]:
+    sentences = nltk.sent_tokenize(text)
+    chunks, current, current_len = [], [], 0
+
+    for sent in sentences:
+        sent_len = len(sent.split())
+        if current_len + sent_len > max_tokens and current:
+            chunks.append(" ".join(current))
+            # Keep last N sentences as overlap into next chunk
+            current = current[-overlap_sentences:]
+            current_len = sum(len(s.split()) for s in current)
+        current.append(sent)
+        current_len += sent_len
+
+    if current:
+        chunks.append(" ".join(current))
+    return chunks
+
+chunks = sentence_aware_chunks(document_text, max_tokens=350, overlap_sentences=2)
+~~~
+
+**Improvement over fixed-size:** Semantic units stay intact. Overlap at sentence level is more meaningful than overlap at token level.
+
+---
+
+## Strategy 3: Semantic Chunking
+
+Detect where the *topic changes* in the document, then split there. Uses embedding similarity between adjacent sentences to find natural break points.
+
+~~~python
+from sentence_transformers import SentenceTransformer
+import numpy as np
+from typing import List
+
+model = SentenceTransformer("BAAI/bge-small-en-v1.5")
+
+def semantic_chunks(text: str, breakpoint_threshold: float = 0.3) -> List[str]:
+    sentences = [s.strip() for s in text.split(". ") if s.strip()]
+    embeddings = model.encode(sentences, normalize_embeddings=True)
+
+    # Cosine similarity between adjacent sentences
+    similarities = [
+        float(np.dot(embeddings[i], embeddings[i + 1]))
+        for i in range(len(embeddings) - 1)
+    ]
+
+    # Find where similarity drops sharply (topic change)
+    mean_sim = np.mean(similarities)
+    breakpoints = [
+        i + 1 for i, s in enumerate(similarities)
+        if s < mean_sim - breakpoint_threshold
+    ]
+
+    chunks, start = [], 0
+    for bp in breakpoints:
+        chunks.append(". ".join(sentences[start:bp]) + ".")
+        start = bp
+    chunks.append(". ".join(sentences[start:]) + ".")
+    return chunks
+~~~
+
+**Best for:** Long-form articles, research papers, product manuals where topics shift naturally. Typically produces 20–40% fewer chunks than fixed-size with higher semantic coherence per chunk.
+
+---
+
+## Strategy 4: Hierarchical (Parent-Child) Chunking
+
+**The key insight:** Small chunks are best for *retrieval precision* (the embedding captures a tight, specific meaning). Large chunks are best for *generation quality* (the LLM has enough context to answer well). You can have both.
+
+Store small child chunks for retrieval. When a child chunk is retrieved, return its large parent chunk to the LLM.
+
+~~~python
+from langchain.retrievers import ParentDocumentRetriever
+from langchain.storage import InMemoryStore
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import Chroma
+from langchain_openai import OpenAIEmbeddings
+
+# Parent splitter: large chunks (1500 tokens) stored in docstore
+parent_splitter = RecursiveCharacterTextSplitter(chunk_size=1500)
+
+# Child splitter: small chunks (300 tokens) embedded + stored in vectorstore
+child_splitter = RecursiveCharacterTextSplitter(chunk_size=300)
+
+vectorstore = Chroma(embedding_function=OpenAIEmbeddings(), collection_name="child_chunks")
+docstore = InMemoryStore()
+
+retriever = ParentDocumentRetriever(
+    vectorstore=vectorstore,
+    docstore=docstore,
+    child_splitter=child_splitter,
+    parent_splitter=parent_splitter,
+)
+
+retriever.add_documents(documents)  # indexes both parent and child
+
+# Query: retrieves small child chunk by embedding, returns large parent to LLM
+results = retriever.invoke("What are the capital requirements for tier-1 banks?")
+# results contains full parent chunks — much richer context for generation
+~~~
+
+**Rule of thumb for chunk sizes:** Child chunks: 150–300 tokens. Parent chunks: 1000–2000 tokens. The child embedding captures the specific claim; the parent gives the LLM enough surrounding context.
+
+> 📍 **ABN AMRO (Amsterdam):** Their internal policy assistant uses parent-child chunking on 12,000 pages of regulatory documents. Child chunks of 256 tokens retrieve precisely; parent chunks of 1024 tokens give the LLM the full regulatory context. Before switching, 23% of answers were missing critical qualifications buried in nearby paragraphs. Parent-child chunking reduced this to 4%.
+
+---
+
+## Strategy 5: Document-Aware Chunking
+
+For structured documents (Markdown, HTML, code), split on logical boundaries — headers, sections, code blocks — not arbitrary token counts.
+
+~~~python
+from langchain.text_splitter import MarkdownHeaderTextSplitter
+
+headers_to_split_on = [
+    ("#", "h1"),
+    ("##", "h2"),
+    ("###", "h3"),
+]
+
+md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on)
+md_docs = md_splitter.split_text(markdown_text)
+
+# Each chunk now carries its header metadata
+for doc in md_docs[:3]:
+    print(doc.metadata)   # {"h1": "API Reference", "h2": "Authentication", "h3": "OAuth 2.0"}
+    print(doc.page_content[:100])
+~~~
+
+**Metadata injection** is the hidden multiplier here. Each chunk should carry: source file, page number, section header, creation date, author, document type. This enables metadata-filtered retrieval (e.g., "only retrieve from documents updated after Jan 2025").
+
+~~~python
+# Add rich metadata at index time
+def enrich_chunk(chunk_text: str, source_doc: dict) -> dict:
+    return {
+        "text": chunk_text,
+        "metadata": {
+            "source": source_doc["filename"],
+            "page": source_doc.get("page", 0),
+            "section": source_doc.get("section", ""),
+            "doc_type": source_doc.get("type", "general"),
+            "created_at": source_doc.get("date", ""),
+            "language": source_doc.get("language", "en"),
+        }
+    }
+~~~
+
+---
+
+## Retrieval Strategy 1: Dense Retrieval (Embedding Similarity)
+
+The baseline: embed the query, find the K nearest chunks by cosine similarity. Fast, semantic, but misses exact keyword matches.
+
+~~~python
+import weaviate
+from weaviate.classes.query import MetadataQuery
+
+client = weaviate.connect_to_local()
+collection = client.collections.get("PolicyChunks")
+
+query_embedding = model.encode("capital requirements tier 1", normalize_embeddings=True)
+
+results = collection.query.near_vector(
+    near_vector=query_embedding.tolist(),
+    limit=5,
+    return_metadata=MetadataQuery(distance=True),
+    filters=weaviate.classes.query.Filter.by_property("doc_type").equal("regulatory")
+)
+
+for obj in results.objects:
+    print(f"Distance: {obj.metadata.distance:.3f} | {obj.properties['text'][:100]}")
+~~~
+
+---
+
+## Retrieval Strategy 2: Hybrid Search (Dense + Sparse)
+
+**The problem with dense-only:** If a user queries "BM25F scoring formula", embeddings may retrieve semantically similar chunks about *ranking algorithms* rather than the *specific formula*. Keyword matches matter for technical and named-entity queries.
+
+**BM25** (Best Match 25) is a probabilistic keyword ranking function. It counts term frequency (TF) and penalises common terms (IDF). Weaviate and Elasticsearch support it natively.
+
+**Reciprocal Rank Fusion (RRF)** merges dense and sparse ranked lists without needing to tune weights:
+
+~~~python
+from weaviate.classes.query import HybridFusion
+
+# Weaviate hybrid search: combines BM25 + vector similarity
+results = collection.query.hybrid(
+    query="tier 1 capital ratio Basel III",
+    alpha=0.6,          # 0 = pure BM25, 1 = pure vector, 0.6 = 60% vector
+    fusion_type=HybridFusion.RELATIVE_SCORE,
+    limit=10,
+)
+
+# Manual RRF if you're combining results from two separate systems
+def reciprocal_rank_fusion(dense_results, sparse_results, k=60):
+    scores = {}
+    for rank, doc_id in enumerate(dense_results):
+        scores[doc_id] = scores.get(doc_id, 0) + 1 / (k + rank + 1)
+    for rank, doc_id in enumerate(sparse_results):
+        scores[doc_id] = scores.get(doc_id, 0) + 1 / (k + rank + 1)
+    return sorted(scores.items(), key=lambda x: x[1], reverse=True)
+~~~
+
+**When to use hybrid:** Almost always in production. Dense handles semantic queries; sparse handles exact product names, error codes, acronyms, and rare terms.
+
+---
+
+## Retrieval Strategy 3: Re-Ranking with Cross-Encoders
+
+Vector search is *approximate* — it uses a lightweight bi-encoder to produce embeddings independently for query and document. A **cross-encoder** sees query and document *together* and produces a much more accurate relevance score — at the cost of being 100× slower.
+
+The pattern: retrieve 20–50 candidates with fast vector search, then re-rank with a cross-encoder, return the top 5 to the LLM.
+
+~~~python
+from sentence_transformers import CrossEncoder
+
+# BGE re-ranker: state-of-the-art open-source, runs on CPU fine
+reranker = CrossEncoder("BAAI/bge-reranker-v2-m3")
+
+query = "What are tier 1 capital requirements under Basel III?"
+# candidate_chunks: list of strings from initial vector retrieval
+candidate_chunks = [r.properties["text"] for r in initial_results.objects]
+
+# Cross-encoder scores each (query, chunk) pair jointly
+scores = reranker.predict([(query, chunk) for chunk in candidate_chunks])
+
+# Re-rank by cross-encoder score
+ranked = sorted(zip(scores, candidate_chunks), key=lambda x: x[0], reverse=True)
+top_chunks = [chunk for _, chunk in ranked[:5]]
+
+# Alternatively: Cohere Rerank API (no GPU needed)
+import cohere
+co = cohere.Client("COHERE_API_KEY")
+rerank_response = co.rerank(
+    query=query,
+    documents=candidate_chunks,
+    top_n=5,
+    model="rerank-english-v3.0"
+)
+~~~
+
+**Empirical impact:** Re-ranking typically improves NDCG@5 by 15–25% over vector-only retrieval. For production systems, the latency cost (50–200ms) is almost always worth it.
+
+---
+
+## Retrieval Strategy 4: HyDE — Hypothetical Document Embeddings
+
+**The problem:** A user query is short ("Basel III capital ratios"). The documents that answer it are long, detailed paragraphs. The embedding spaces do not match well — the query embedding is far from the answer embedding even when the answer is correct.
+
+**HyDE fix:** Ask the LLM to hallucinate a hypothetical perfect answer to the query. Embed *that* answer. Search for similar documents. The hallucinated answer is in the same embedding space as real answers.
+
+~~~python
+from openai import OpenAI
+
+client = OpenAI()
+
+def hyde_retrieve(query: str, vectorstore, k: int = 5) -> list:
+    # Step 1: generate a hypothetical answer (it can be wrong — that is fine)
+    hyp_response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "Write a detailed technical answer to the following question. It is OK to speculate — focus on sounding like a real document."},
+            {"role": "user", "content": query}
+        ],
+        max_tokens=300,
+    )
+    hypothetical_doc = hyp_response.choices[0].message.content
+
+    # Step 2: embed the hypothetical doc (not the original query)
+    hyp_embedding = model.encode(hypothetical_doc, normalize_embeddings=True)
+
+    # Step 3: retrieve using the hypothetical embedding
+    results = vectorstore.similarity_search_by_vector(hyp_embedding.tolist(), k=k)
+    return results
+
+results = hyde_retrieve("What are tier 1 capital requirements under Basel III?", vectorstore)
+~~~
+
+**When HyDE shines:** Technical queries where the user's phrasing differs significantly from how answers are written (e.g., layman question → regulatory language answer). Benchmark: HyDE improves recall@5 by 8–18% on document QA tasks.
+
+---
+
+## Measuring Retrieval Quality
+
+Before optimising the LLM, measure whether your *retrieval* is actually working. Three metrics matter:
+
+| Metric | Formula | What it measures |
+|--------|---------|-----------------|
+| **Hit Rate @K** | Does ground-truth chunk appear in top K? | Basic recall |
+| **MRR@K** | Mean reciprocal rank of first relevant chunk | Ranking quality |
+| **NDCG@K** | Normalised Discounted Cumulative Gain | Graded relevance |
+
+~~~python
+def hit_rate_at_k(retrieval_fn, eval_dataset, k=5):
+    hits = 0
+    for item in eval_dataset:
+        retrieved = retrieval_fn(item["query"], k=k)
+        retrieved_ids = [doc.metadata["chunk_id"] for doc in retrieved]
+        if item["relevant_chunk_id"] in retrieved_ids:
+            hits += 1
+    return hits / len(eval_dataset)
+
+def mrr_at_k(retrieval_fn, eval_dataset, k=5):
+    reciprocal_ranks = []
+    for item in eval_dataset:
+        retrieved = retrieval_fn(item["query"], k=k)
+        retrieved_ids = [doc.metadata["chunk_id"] for doc in retrieved]
+        for rank, doc_id in enumerate(retrieved_ids, start=1):
+            if doc_id == item["relevant_chunk_id"]:
+                reciprocal_ranks.append(1 / rank)
+                break
+        else:
+            reciprocal_ranks.append(0.0)
+    return sum(reciprocal_ranks) / len(reciprocal_ranks)
+
+print(f"Hit Rate @5: {hit_rate_at_k(retriever.invoke, eval_set):.2%}")
+print(f"MRR @5:      {mrr_at_k(retriever.invoke, eval_set):.3f}")
+~~~
+
+**Build a golden test set:** For each new document corpus, create 50–100 (query, expected_chunk_id) pairs manually or with an LLM. Run these metrics after every change to retrieval configuration. Without this, you are flying blind.
+
+> 📍 **Philips (Eindhoven):** Their clinical documentation assistant optimised chunking using a 200-question golden dataset created by medical writers. Switching from fixed 512-token chunks to parent-child chunking raised hit rate @5 from 61% to 84%, and MRR from 0.48 to 0.71. The retrieval improvement alone reduced hallucination-flagged answers by 31% — before they touched the LLM or prompt template.`
+      },
     ]
   },
   {
@@ -1407,7 +1778,629 @@ print(result['explanation'])
 ~~~
 
 > 📍 **Adyen (Amsterdam):** Their fraud investigation agent runs a multi-step ReAct loop when a transaction is flagged. Step 1: retrieves the merchant's historical fraud rate. Step 2: queries the customer's last 30 transactions. Step 3: checks the device fingerprint against known fraud device signatures. Step 4: verifies the IP geolocation against the account's typical locations. Step 5: synthesises all signals into a risk score with a written explanation for the human reviewer. Previously, a human analyst took 15-20 minutes per case manually. The agent completes analysis in under 8 seconds and escalates only the genuinely ambiguous cases to humans.`
-      }
+      },
+      {
+        id: 'llmops-gateway',
+        title: 'LLMOps & AI Gateways',
+        duration: '30 min',
+        content: `## LLMOps: Running LLMs in Production
+
+Software engineering for LLMs is fundamentally different from traditional software engineering, and even from classical MLOps. The key differences:
+
+| Dimension | Traditional Software | MLOps | LLMOps |
+|-----------|---------------------|-------|--------|
+| Deployable unit | Binary / container | Model artifact | Model + prompt + retrieval config |
+| "Bug" | Deterministic error | Data drift | Hallucination / output quality drift |
+| Testing | Unit / integration tests | Accuracy on held-out set | Semantic evaluation, LLM judges |
+| Versioning | Git commit | Model version | Model + prompt + system context version |
+| Observability | Logs, metrics, traces | Feature distributions | Token traces, latency, cost, output quality |
+| Cost unit | Compute per request | Inference cost | Token cost per conversation |
+
+This lesson walks through the full LLMOps lifecycle: observability, cost management, AI gateways, and production deployment patterns.
+
+---
+
+## The LLM Production Lifecycle
+
+A production LLM application goes through 5 recurring stages:
+
+**1. Prompt Development** → iterate on prompts, evaluate on test sets
+**2. Deployment** → serve behind an AI gateway with routing + fallbacks
+**3. Monitoring** → trace every request: latency, cost, quality signals
+**4. Evaluation** → run automated evals nightly; flag regressions
+**5. Improvement** → fine-tune, update retrieval, revise prompts → back to 1
+
+The biggest trap: teams spend weeks on stage 1 (getting a demo to work) then skip stages 2–5 entirely until a production incident forces them to add observability retroactively. Build observability *before* launch.
+
+---
+
+## Observability: What to Trace in Every LLM Request
+
+Standard APM tools (Datadog, New Relic) were not built for LLMs. You need tooling that captures:
+
+- **Full prompt + completion** (for debugging and quality audits)
+- **Token counts** (input + output separately — output tokens cost 3–5× more)
+- **Latency** (time to first token, total generation time)
+- **Model + version** used
+- **User session / conversation thread ID**
+- **Tool calls** for agents (which tools, what inputs, what outputs)
+- **Retrieved chunks** for RAG (which documents, what scores)
+- **Custom quality signals** (thumbs up/down, downstream conversion)
+
+### Langfuse: Open-Source LLM Observability
+
+~~~python
+from langfuse import Langfuse
+from langfuse.openai import openai  # drop-in OpenAI wrapper
+
+langfuse = Langfuse(
+    public_key="lf_pk_...",
+    secret_key="lf_sk_...",
+    host="https://cloud.langfuse.com"  # or self-host
+)
+
+# Every call is now automatically traced — no other changes needed
+response = openai.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Explain Basel III capital requirements"}],
+    # Optional: attach business metadata to the trace
+    metadata={"user_id": "u_12345", "session_id": "sess_abc", "feature": "policy_assistant"},
+)
+~~~
+
+**For LangChain / LangGraph agents:**
+
+~~~python
+from langfuse.callback import CallbackHandler
+
+langfuse_handler = CallbackHandler(
+    public_key="lf_pk_...",
+    secret_key="lf_sk_...",
+)
+
+# Automatically traces every step: LLM calls, tool calls, retrieval
+result = agent_executor.invoke(
+    {"input": "Summarise Q3 2025 earnings for ASML"},
+    config={"callbacks": [langfuse_handler]}
+)
+~~~
+
+**What you see in Langfuse:** A full tree of every step in the agent loop — which tool was called with what arguments, what it returned, what the LLM decided next, total cost and latency for the entire chain.
+
+---
+
+## AI Gateways: The Traffic Control Layer for LLMs
+
+An **AI Gateway** sits between your application and every LLM API. Think of it as an API gateway (like Kong or NGINX) but purpose-built for the unique challenges of LLM traffic.
+
+**Why you need one in production:**
+
+- You call OpenAI today. GPT-5 launches and is 50% cheaper. Can you switch models in one config change, not 50 code changes?
+- OpenAI has an outage. Can you automatically fall back to Anthropic Claude in under 100ms?
+- Your app goes viral. Can you rate-limit by user to prevent runaway costs?
+- 40% of your queries are near-identical. Can you cache them and pay zero API cost?
+
+### LiteLLM: One Interface, 100+ Models
+
+LiteLLM translates between provider APIs. You write code once using the OpenAI SDK format; LiteLLM routes it to any provider.
+
+~~~python
+from litellm import completion
+
+# Same interface for all providers — swap the model string to change providers
+response = completion(
+    model="anthropic/claude-sonnet-4-5",   # or "gpt-4o", "gemini/gemini-1.5-pro"
+    messages=[{"role": "user", "content": "Summarise this contract"}],
+    timeout=30,
+    fallbacks=["gpt-4o", "groq/llama-3.1-70b-versatile"],  # automatic fallback chain
+    num_retries=3,
+)
+
+# Proxy server mode: all your services call one endpoint
+# Start: litellm --model gpt-4o --fallbacks claude-sonnet-4-5
+# Config: load_balancing, rate_limits, cost_alerts — all in one YAML
+~~~
+
+**LiteLLM proxy as a team-wide gateway:**
+
+~~~yaml
+# litellm_config.yaml
+model_list:
+  - model_name: fast-llm          # internal alias your team uses
+    litellm_params:
+      model: gpt-4o-mini
+      api_key: os.environ/OPENAI_KEY
+
+  - model_name: smart-llm
+    litellm_params:
+      model: anthropic/claude-opus-4-5
+      api_key: os.environ/ANTHROPIC_KEY
+
+router_settings:
+  routing_strategy: latency-based-routing   # route to fastest live model
+  fallbacks: [{"smart-llm": ["fast-llm"]}]  # auto-failover
+
+general_settings:
+  max_budget: 100.0        # USD — hard stop when reached
+  budget_duration: 1d      # resets daily
+  alerting: ["slack"]      # ping Slack at 80% of budget
+~~~
+
+---
+
+## Semantic Caching: Your Biggest Cost Lever
+
+**The insight:** In most production LLM apps, 30–50% of queries are semantically near-identical. "What is the refund policy?" and "How do I get a refund?" deserve the same answer. Why pay for two LLM calls?
+
+Semantic caching stores (query_embedding → response) pairs. When a new query arrives, check if a semantically similar query has been answered before. If the cosine similarity exceeds a threshold, return the cached answer.
+
+~~~python
+import redis
+import numpy as np
+from sentence_transformers import SentenceTransformer
+
+model = SentenceTransformer("BAAI/bge-small-en-v1.5")
+r = redis.Redis(host="localhost", port=6379, decode_responses=True)
+
+def semantic_cache_get(query: str, threshold: float = 0.92) -> str | None:
+    query_emb = model.encode(query, normalize_embeddings=True)
+    # In production: use Redis with vector search (Redis Stack / Upstash Vector)
+    # For simplicity: iterate stored embeddings
+    cached_keys = r.keys("cache:emb:*")
+    for key in cached_keys:
+        stored_emb = np.frombuffer(r.get(key), dtype=np.float32)
+        similarity = float(np.dot(query_emb, stored_emb))
+        if similarity >= threshold:
+            cache_id = key.replace("cache:emb:", "")
+            return r.get(f"cache:resp:{cache_id}")
+    return None
+
+def semantic_cache_set(query: str, response: str) -> None:
+    import uuid
+    cache_id = str(uuid.uuid4())
+    emb = model.encode(query, normalize_embeddings=True)
+    r.set(f"cache:emb:{cache_id}", emb.tobytes())
+    r.set(f"cache:resp:{cache_id}", response, ex=3600 * 24)  # 24h TTL
+
+# Usage in your LLM call wrapper
+def cached_llm_call(query: str) -> str:
+    cached = semantic_cache_get(query)
+    if cached:
+        return cached   # 0ms, $0.00 cost
+    response = call_llm(query)  # real LLM call
+    semantic_cache_set(query, response)
+    return response
+~~~
+
+**Portkey** offers semantic caching as a managed service — no Redis setup required. Cache hit rate in practice: 25–45% depending on domain. For a customer support assistant answering FAQ-type questions, cache hit rates above 60% are achievable.
+
+---
+
+## Cost Anatomy and Optimisation
+
+Understanding where your LLM costs come from:
+
+~~~python
+# Typical cost breakdown for a RAG-based customer support query
+# (numbers representative, not exact)
+
+cost_per_query = {
+    "input_tokens": {
+        "system_prompt":      200,   # tokens
+        "retrieved_chunks":  1200,   # 5 chunks x 240 tokens
+        "user_query":          30,
+        "total":             1430,
+        "cost_usd":         0.0014   # gpt-4o: $1/1M input tokens
+    },
+    "output_tokens": {
+        "response":           250,
+        "cost_usd":          0.001   # gpt-4o: $4/1M output tokens
+    },
+    "total_cost_usd": 0.0024
+}
+
+# 100k queries/day = $240/day = $87,600/year
+# With 40% semantic cache hit rate: $52,560/year
+# With prompt compression (remove boilerplate): $40,000/year
+# With smart routing (80% fast model, 20% smart model): $28,000/year
+~~~
+
+**The four cost levers:**
+
+**1. Semantic caching** — as above. 25–45% cost reduction.
+
+**2. Model routing by complexity:** Use a cheap fast model (GPT-4o-mini, Haiku) for simple queries; expensive model only for complex ones.
+
+~~~python
+def route_by_complexity(query: str) -> str:
+    # Simple heuristic: short, keyword-like queries go to fast model
+    if len(query.split()) < 12 and "?" in query:
+        return "gpt-4o-mini"   # $0.15/1M input vs $2.50/1M for gpt-4o
+    return "gpt-4o"
+~~~
+
+**3. Prompt compression:** Remove filler from system prompts. A 200-token system prompt across 1M daily queries = 200M tokens/day input cost. Tighten every word.
+
+**4. Retrieval window:** Don't pass 10 chunks if 3 suffice. Measure whether extra chunks actually improve answer quality (often they do not beyond 5).
+
+---
+
+## Prompt Versioning and A/B Testing
+
+Prompts are code. They need version control, testing, and staged rollouts.
+
+~~~python
+# Langfuse prompt management: version-controlled, A/B testable
+from langfuse import Langfuse
+
+langfuse = Langfuse()
+
+# Fetch a specific prompt version (or "production" tagged version)
+prompt = langfuse.get_prompt("policy-assistant-v2", version=3)
+
+# Compile with variables
+compiled = prompt.compile(
+    language="Dutch",
+    date=str(datetime.today().date()),
+    user_tier="premium"
+)
+
+response = openai.chat.completions.create(
+    model="gpt-4o",
+    messages=compiled.messages,
+)
+~~~
+
+**A/B test prompts:** Route 10% of traffic to new prompt version, compare quality scores from your LLM judge. Only promote to 100% when statistically significant improvement is confirmed. This is standard software engineering practice applied to prompts — surprisingly few teams do it.
+
+> 📍 **Coolblue (Rotterdam):** Their product recommendation assistant processes 800K queries/day. Their AI Gateway (LiteLLM + custom routing logic) routes 75% of queries to GPT-4o-mini, 20% to GPT-4o for complex multi-step queries, and 5% to Claude for creative product descriptions. Semantic caching handles 38% of queries with zero API cost. Combined, this brings cost per query from €0.0045 to €0.0012 — a 73% reduction — without measurable quality degradation. Their weekly prompt A/B test cycle means prompt improvements ship in 7 days, not the 6-week deploy cycles they had with a monolithic backend.`
+      },
+      {
+        id: 'evaluation-metrics',
+        title: 'Evaluation, Metrics & LLM Judges',
+        duration: '30 min',
+        content: `## Why Evaluation is Hard for Generative Systems
+
+With a traditional classifier, evaluation is easy: compare predicted labels to ground truth labels, compute accuracy. Done.
+
+With generative AI, there is no single correct output. "Explain compound interest to a 12-year-old" has thousands of valid answers. How do you know if your system got better or worse after a prompt change?
+
+**Three core challenges:**
+
+**1. No ground truth** — there are many correct answers. Binary correct/incorrect does not apply.
+
+**2. Multi-dimensional quality** — an answer can be factually correct but poorly formatted, or fluent but hallucinated. You need multiple metrics.
+
+**3. Evaluation cost** — human evaluation is expensive and slow. Automated metrics (BLEU, ROUGE) correlate poorly with human judgement for LLM outputs. You need smarter automated evaluation.
+
+The solution stack: **task-specific metrics** (RAGAS for RAG) + **LLM-as-judge** (for general quality) + **human-in-the-loop** (for high-stakes decisions and eval set construction).
+
+---
+
+## The Evaluation Pyramid
+
+~~~
+          /\\
+         /  \\    Human evaluation
+        /    \\   (expensive, slow, high signal)
+       /      \\
+      /--------\\
+     /          \\  LLM-as-judge
+    /            \\  (medium cost, good signal)
+   /--------------\\
+  /                \\  Automated metrics (RAGAS, BLEU, exact match)
+ /------------------\\  (cheap, fast, limited signal)
+~~~
+
+Use all three. Automated metrics catch regressions cheaply. LLM judges give nuanced quality signals at scale. Humans define the ground truth and handle edge cases.
+
+---
+
+## RAG Metrics with RAGAS
+
+RAGAS (Retrieval Augmented Generation Assessment) provides four core metrics:
+
+| Metric | Measures | How |
+|--------|----------|-----|
+| **Faithfulness** | Is the answer grounded in the retrieved context? | LLM checks each claim against context |
+| **Answer Relevancy** | Does the answer address the actual question? | Embed generated question from answer; similarity to original |
+| **Context Precision** | Were retrieved chunks actually useful? | Fraction of relevant chunks in top K |
+| **Context Recall** | Did retrieval find all necessary information? | Fraction of ground-truth claims covered by context |
+
+~~~python
+from ragas import evaluate
+from ragas.metrics import (
+    faithfulness,
+    answer_relevancy,
+    context_precision,
+    context_recall,
+)
+from datasets import Dataset
+
+# Your eval dataset: question, answer, contexts, ground_truth
+eval_data = {
+    "question": [
+        "What is the maximum LTV ratio for Amsterdam residential mortgages?",
+        "What documents are required for ING business account opening?",
+    ],
+    "answer": [
+        "The maximum LTV ratio is 100% for owner-occupied properties.",
+        "You need a Chamber of Commerce extract, valid ID, and proof of address.",
+    ],
+    "contexts": [
+        ["ING mortgage policy 2025: LTV for owner-occupied residential properties is capped at 100% of market value..."],
+        ["Business account requirements: KvK extract (max 3 months old), valid passport or EU ID card, utility bill dated within 90 days..."],
+    ],
+    "ground_truth": [
+        "The maximum LTV is 100% for owner-occupied residential properties in the Netherlands.",
+        "Required: KvK extract, valid identity document, proof of address (utility bill).",
+    ],
+}
+
+dataset = Dataset.from_dict(eval_data)
+results = evaluate(
+    dataset,
+    metrics=[faithfulness, answer_relevancy, context_precision, context_recall],
+)
+
+print(results)
+# faithfulness:      0.94   — good, almost no hallucination
+# answer_relevancy:  0.87   — most answers address the question
+# context_precision: 0.71   — some irrelevant chunks being retrieved
+# context_recall:    0.83   — missing a few key facts in retrieval
+~~~
+
+**Interpreting results in production:**
+
+- **Faithfulness < 0.85** → your LLM is hallucinating beyond the context. Add explicit "only use the provided context" instructions, or use a more instruction-following model.
+- **Context precision < 0.70** → retrieval is noisy; too many irrelevant chunks. Reduce K, add re-ranking, tighten metadata filters.
+- **Context recall < 0.75** → retrieval is missing key information. Improve chunking, add hybrid search, check embedding model quality.
+
+**Running RAGAS in CI/CD:**
+
+~~~python
+# .github/workflows/ragas-eval.yml equivalent in Python
+import subprocess, json
+
+def run_ragas_gate(threshold: float = 0.80) -> bool:
+    results = evaluate(dataset, metrics=[faithfulness, answer_relevancy, context_precision, context_recall])
+    scores = results.to_pandas().mean().to_dict()
+
+    print("\\nRAGAS Evaluation Results:")
+    for metric, score in scores.items():
+        status = "PASS" if score >= threshold else "FAIL"
+        print(f"  {metric}: {score:.3f} [{status}]")
+
+    all_pass = all(score >= threshold for score in scores.values())
+    return all_pass
+
+if not run_ragas_gate(threshold=0.80):
+    print("\\nEval gate failed — blocking deployment")
+    exit(1)   # fails CI/CD pipeline
+~~~
+
+---
+
+## LLM-as-Judge
+
+**The concept:** Use a powerful LLM (GPT-4o, Claude Opus, Gemini Pro) to evaluate the outputs of a potentially weaker or faster model. The judge LLM reads (question, answer, optionally context) and produces a score + reasoning.
+
+**Why it works:** Humans and GPT-4-class models agree on quality rankings ~80–85% of the time for most tasks. That is good enough to catch regressions and guide improvement — not perfect, but vastly faster than human annotation.
+
+### Writing a Good Judge Prompt
+
+A poorly written judge prompt produces unreliable, biased scores. The key elements:
+
+1. **Define a clear rubric** — exactly what each score means
+2. **Force chain-of-thought reasoning** before the score
+3. **Return structured JSON** for easy parsing
+4. **One dimension at a time** — separate prompts for accuracy vs. tone vs. completeness
+
+~~~python
+from openai import OpenAI
+
+client = OpenAI()
+
+JUDGE_PROMPT = """You are an expert evaluator for an AI assistant that answers Dutch banking policy questions.
+
+Evaluate the following response for FAITHFULNESS — whether every factual claim in the answer is supported by the provided context.
+
+Question: {question}
+Context: {context}
+Answer to evaluate: {answer}
+
+Reasoning: Think step by step. For each factual claim in the answer, check if it appears in the context.
+Then give a score.
+
+Return a JSON object:
+{{
+  "reasoning": "step-by-step analysis of each claim",
+  "score": 1-5,
+  "verdict": "PASS" or "FAIL"
+}}
+
+Score rubric:
+5 - Every claim is directly supported by the context
+4 - All key claims supported; minor unsupported elaboration
+3 - Most claims supported; one unsupported claim
+2 - Several unsupported claims
+1 - Answer contradicts or ignores the context"""
+
+def llm_judge(question: str, context: str, answer: str) -> dict:
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "You are a precise evaluator. Return only valid JSON."},
+            {"role": "user", "content": JUDGE_PROMPT.format(
+                question=question, context=context, answer=answer
+            )}
+        ],
+        temperature=0,        # deterministic for consistency
+        response_format={"type": "json_object"}
+    )
+    return json.loads(response.choices[0].message.content)
+
+result = llm_judge(
+    question="What is the maximum LTV for residential mortgages?",
+    context="ING policy 2025: LTV for owner-occupied properties capped at 100% of market value...",
+    answer="The maximum LTV ratio is 100% for owner-occupied properties, or 110% for first-time buyers."
+)
+print(result)
+# {"reasoning": "Claim '100% for owner-occupied' is supported. Claim '110% for first-time buyers' is NOT in context.",
+#  "score": 2, "verdict": "FAIL"}
+~~~
+
+---
+
+## LLM Judge Biases and How to Mitigate Them
+
+LLM judges are not neutral. Understanding their biases is essential for reliable evaluation:
+
+#### Verbosity Bias
+Longer answers receive higher scores even when a shorter answer is more accurate. The judge conflates length with quality.
+
+**Mitigation:** Explicitly state in your judge prompt: "Prefer concise, accurate answers over verbose ones. Do not reward length."
+
+#### Position Bias
+When comparing two answers side by side (A vs B), the judge prefers whichever appears first.
+
+**Mitigation:** Run each comparison twice with positions swapped. Count a tie if results differ.
+
+~~~python
+def pairwise_eval(question, answer_a, answer_b, context):
+    result_ab = compare_answers(question, answer_a, answer_b, context)  # A first
+    result_ba = compare_answers(question, answer_b, answer_a, context)  # B first
+
+    if result_ab["winner"] == "A" and result_ba["winner"] == "B":
+        return "A"   # consistent preference for A
+    elif result_ab["winner"] == "B" and result_ba["winner"] == "A":
+        return "B"   # consistent preference for B
+    else:
+        return "TIE"  # inconsistent — treat as tie
+~~~
+
+#### Self-Preference Bias
+GPT-4 as a judge scores GPT-4 outputs higher than outputs from other models, even when they are identical in quality.
+
+**Mitigation:** Use a different-family model as judge (e.g., use Claude to judge GPT outputs and vice versa). Or use a specialised judge model (Prometheus-2 is fine-tuned specifically for evaluation and has lower self-preference bias).
+
+---
+
+## Human-in-the-Loop Evaluation
+
+Automated metrics and LLM judges are proxies. For high-stakes domains — medical advice, legal documents, financial decisions — you need humans in the loop. Human evaluation also defines your ground truth for calibrating automated evaluators.
+
+#### When You Need Humans
+
+- **New domain or product launch:** automated evals are not calibrated yet. Humans set the baseline.
+- **Regulatory compliance:** some industries require documented human review of AI outputs.
+- **Novel failure modes:** LLM judges miss failure patterns they have not seen before. Humans catch them.
+- **Annotation for fine-tuning:** creating preference pairs for RLHF/DPO requires human judgement.
+
+#### Designing an Annotation Pipeline
+
+~~~python
+# Simple annotation interface (production tools: Label Studio, Argilla, Scale AI)
+annotation_tasks = []
+
+for sample in flagged_samples:  # samples flagged by automated evals as borderline
+    annotation_tasks.append({
+        "id": sample["id"],
+        "question": sample["question"],
+        "answer": sample["answer"],
+        "context": sample["context"],
+        "annotation_schema": {
+            "faithfulness": "1-5 (1=hallucinated, 5=fully grounded)",
+            "helpfulness": "1-5 (1=useless, 5=completely resolves the question)",
+            "safety": "SAFE / BORDERLINE / UNSAFE",
+            "free_text": "Optional: note any specific issues"
+        }
+    })
+
+# Assign 2-3 annotators per sample for inter-annotator agreement
+~~~
+
+#### Inter-Annotator Agreement
+
+Agreement between human annotators measures annotation quality. Low agreement = ambiguous guidelines, not bad annotators.
+
+~~~python
+from sklearn.metrics import cohen_kappa_score
+
+# Annotator 1 and Annotator 2 scores for 100 samples
+annotator_1_scores = [5, 4, 3, 5, 2, ...]   # faithfulness scores
+annotator_2_scores = [5, 3, 3, 4, 2, ...]
+
+kappa = cohen_kappa_score(annotator_1_scores, annotator_2_scores)
+print(f"Cohen's Kappa: {kappa:.3f}")
+# < 0.40: poor agreement — revise annotation guidelines
+# 0.40-0.60: moderate — acceptable for subjective tasks
+# 0.60-0.80: substantial — good
+# > 0.80: almost perfect — excellent
+~~~
+
+**Active learning for annotation efficiency:** Do not annotate samples randomly. Annotate where your automated evaluator is *most uncertain* (scores near the decision boundary). This gives you maximum signal per annotation dollar.
+
+~~~python
+def select_for_annotation(samples: list, uncertainty_threshold: float = 0.15) -> list:
+    priority = []
+    for sample in samples:
+        auto_score = run_llm_judge(sample)["score"] / 5.0   # normalise to 0-1
+        uncertainty = abs(auto_score - 0.5)                  # distance from decision boundary
+        if uncertainty < uncertainty_threshold:
+            priority.append(sample)                           # most uncertain → annotate first
+    return sorted(priority, key=lambda x: abs(run_llm_judge(x)["score"] / 5.0 - 0.5))
+~~~
+
+---
+
+## Building a Continuous Evaluation Pipeline
+
+Evaluation should not be a one-time activity before launch. Build it into your CI/CD pipeline:
+
+~~~python
+# eval_pipeline.py — runs on every PR and nightly
+import os
+from ragas import evaluate
+from ragas.metrics import faithfulness, answer_relevancy, context_precision
+
+THRESHOLDS = {
+    "faithfulness":      0.85,
+    "answer_relevancy":  0.80,
+    "context_precision": 0.70,
+}
+
+def main():
+    # Load eval dataset from version-controlled file
+    eval_dataset = load_golden_dataset("eval/golden_set_v3.jsonl")
+
+    # Run your current RAG pipeline on all questions
+    predictions = run_pipeline_on_dataset(eval_dataset)
+
+    # Score with RAGAS
+    scores = evaluate(predictions, metrics=[faithfulness, answer_relevancy, context_precision])
+    score_dict = scores.to_pandas().mean().to_dict()
+
+    # Gate: block deployment if any metric regresses
+    failures = [m for m, s in score_dict.items() if s < THRESHOLDS[m]]
+    if failures:
+        print(f"EVAL GATE FAILED: {failures}")
+        os._exit(1)
+    else:
+        print("All eval metrics passed.")
+        os._exit(0)
+~~~
+
+**The production eval stack most teams settle on:**
+- **RAGAS** for RAG-specific metrics (faithfulness, relevancy)
+- **LLM judge** (GPT-4o or Claude) for general quality, tone, safety
+- **Langfuse** for collecting real-user thumbs-up/down feedback
+- **Arize Phoenix** or **Langfuse** for dashboarding metric trends over time
+- **Label Studio** or **Argilla** for human annotation campaigns
+- **Golden test set** (200–500 curated samples) in version control, run on every merge
+
+> 📍 **ASML (Eindhoven):** Their internal engineering knowledge assistant answers questions from 14,000 engineers about chip-manufacturing processes. Given the safety-critical nature of semiconductor manufacturing, they run a three-layer eval: (1) RAGAS faithfulness nightly — any score below 0.90 triggers an alert; (2) a custom LLM judge (Claude Opus) evaluates 5% of live production queries daily for technical accuracy; (3) a panel of 8 senior engineers reviews 50 flagged queries monthly and annotates ground-truth answers. Their LLM judge agrees with the human panel 83% of the time — close enough to catch regressions, not close enough to replace human oversight for safety-critical answers. The monthly human review both catches novel failure modes and continuously refreshes the golden test set.`
+      },
     ]
   },
   {
